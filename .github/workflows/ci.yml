@@ -32,7 +32,7 @@ jobs:
       - name: Benchmark
         run: RUSTFLAGS='-C target-cpu=native' cargo bench
       - name: Upload benchmark artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: target/criterion
 
@@ -45,4 +45,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v1
+        uses: actions/deploy-pages@v4
