@@ -133,32 +133,102 @@ pub fn bit_unpack<T: BitPackable>(
         return Vec::new();
     }
 
+    unsafe { bit_unpack_impl(packed_data, bit_width, original_count) }
+}
+
+unsafe fn bit_unpack_impl<T: BitPackable>(
+    packed_data: &[u64],
+    bit_width: usize,
+    original_count: usize,
+) -> Vec<T> {
     let mask = if bit_width == 64 {
-        u128::MAX
+        u64::MAX
     } else {
-        (1u128 << bit_width) - 1
+        (1u64 << bit_width) - 1
     };
 
-    let mut result = vec![T::from_u64(0); original_count];
-
+    let mut result = Vec::with_capacity(original_count);
     unsafe {
-        let mut out_ptr = result.as_mut_ptr();
-        let mut in_ptr = packed_data.as_ptr();
-        let mut buffer: u128 = *in_ptr as u128;
-        in_ptr = in_ptr.add(1);
-        let mut bits_available = 64usize;
+        result.set_len(original_count);
+    }
 
-        for _ in 0..original_count {
-            if bits_available < bit_width {
-                buffer |= (*in_ptr as u128) << bits_available;
-                in_ptr = in_ptr.add(1);
-                bits_available += 64;
+    let mut out_ptr = result.as_mut_ptr();
+
+    let mut in_idx = 0usize;
+    let mut current = unsafe { *packed_data.get_unchecked(in_idx) };
+    in_idx += 1;
+    let mut next = if in_idx < packed_data.len() {
+        unsafe { *packed_data.get_unchecked(in_idx) }
+    } else {
+        0
+    };
+
+    let mut bit_offset = 0u32;
+    let w = bit_width as u32;
+    let mut remaining = original_count;
+
+    macro_rules! decode_value {
+        () => {{
+            let val: u64;
+            if bit_offset <= 64 - w {
+                val = (current >> bit_offset) & mask;
+                bit_offset += w;
+                if bit_offset == 64 {
+                    current = next;
+                    in_idx += 1;
+                    next = if in_idx < packed_data.len() {
+                        unsafe { *packed_data.get_unchecked(in_idx) }
+                    } else {
+                        0
+                    };
+                    bit_offset = 0;
+                }
+            } else {
+                let combined = (current >> bit_offset) | (next << (64 - bit_offset));
+                val = combined & mask;
+                current = next;
+                in_idx += 1;
+                next = if in_idx < packed_data.len() {
+                    unsafe { *packed_data.get_unchecked(in_idx) }
+                } else {
+                    0
+                };
+                bit_offset = bit_offset + w - 64;
             }
-            *out_ptr = T::from_u64((buffer & mask) as u64);
-            out_ptr = out_ptr.add(1);
-            buffer >>= bit_width;
-            bits_available -= bit_width;
+            val
+        }};
+    }
+
+    while remaining >= 8 {
+        let v0 = decode_value!();
+        let v1 = decode_value!();
+        let v2 = decode_value!();
+        let v3 = decode_value!();
+        let v4 = decode_value!();
+        let v5 = decode_value!();
+        let v6 = decode_value!();
+        let v7 = decode_value!();
+        unsafe {
+            core::ptr::write(out_ptr, T::from_u64(v0));
+            core::ptr::write(out_ptr.add(1), T::from_u64(v1));
+            core::ptr::write(out_ptr.add(2), T::from_u64(v2));
+            core::ptr::write(out_ptr.add(3), T::from_u64(v3));
+            core::ptr::write(out_ptr.add(4), T::from_u64(v4));
+            core::ptr::write(out_ptr.add(5), T::from_u64(v5));
+            core::ptr::write(out_ptr.add(6), T::from_u64(v6));
+            core::ptr::write(out_ptr.add(7), T::from_u64(v7));
+            out_ptr = out_ptr.add(8);
         }
+        remaining -= 8;
+    }
+
+    while remaining > 0 {
+        let v = decode_value!();
+        unsafe {
+            core::ptr::write(out_ptr, T::from_u64(v));
+            out_ptr = out_ptr.add(1);
+        }
+        remaining -= 1;
     }
 
     result
