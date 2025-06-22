@@ -147,10 +147,7 @@ unsafe fn bit_unpack_impl<T: BitPackable>(
         (1u64 << bit_width) - 1
     };
 
-    let mut result = Vec::with_capacity(original_count);
-    unsafe {
-        result.set_len(original_count);
-    }
+    let mut result = vec![T::from_u64(0); original_count];
 
     let mut out_ptr = result.as_mut_ptr();
 
