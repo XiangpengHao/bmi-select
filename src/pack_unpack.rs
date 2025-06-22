@@ -196,7 +196,7 @@ mod tests {
 
         // Verify we're using space efficiently
         let expected_bits = data.len() * bit_width; // 5 * 33 = 165 bits
-        let expected_u64s = (expected_bits + 63) / 64; // 3 u64s
+        let expected_u64s = expected_bits.div_ceil(64); // 3 u64s
         assert_eq!(packed.len(), expected_u64s);
     }
 
@@ -242,7 +242,7 @@ mod tests {
 
         // 100 values * 10 bits = 1000 bits
         // 1000 bits / 64 bits per u64 = 15.625, so we need 16 u64s
-        let expected_u64s = (100 * 10 + 63) / 64;
+        let expected_u64s = (100 * 10usize).div_ceil(64);
         assert_eq!(packed.len(), expected_u64s);
 
         // This should be much less than storing 100 full u64s

@@ -274,16 +274,16 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
 
         // Benchmark our implementation
         group.bench_with_input(
-            BenchmarkId::new("bmi_select", format!("{}%", ratio_percent)),
+            BenchmarkId::new("bmi_select", format!("{ratio_percent}%")),
             &(packed_data.clone(), bit_mask),
             |b, (packed, mask)| {
-                b.iter(|| select_packed(black_box(&packed), black_box(bit_width), black_box(&mask)))
+                b.iter(|| select_packed(black_box(packed), black_box(bit_width), black_box(mask)))
             },
         );
 
         // Benchmark fastlanes implementation
         group.bench_function(
-            BenchmarkId::new("fastlanes", format!("{}%", ratio_percent)),
+            BenchmarkId::new("fastlanes", format!("{ratio_percent}%")),
             |b| {
                 let mut unpacked = vec![0u64; size];
                 let mut mask_unpacked = vec![0u64; size];
@@ -318,7 +318,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
 
                     // Repack selected values
                     let num_selected = selected.len();
-                    let out_batches = (num_selected + 1023) / 1024;
+                    let out_batches = num_selected.div_ceil(1024);
                     repacked.clear();
                     repacked.resize(out_batches * out_batch, 0u64);
 
