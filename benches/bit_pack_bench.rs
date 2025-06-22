@@ -99,7 +99,7 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
 fn bench_select_packed_selection_ratios(c: &mut Criterion) {
     let mut group = c.benchmark_group("select_packed_ratios");
 
-    let size = 10000;
+    let size = 16384;
     let bit_width = 7;
     let selection_ratios = vec![0.01, 0.1, 0.3, 0.7];
 
@@ -120,9 +120,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
             .collect();
         let bit_mask = bit_pack(&mask_data, 1);
 
-        let expected_selected = (size as f64 * ratio) as u64;
-        group.throughput(Throughput::Elements(expected_selected));
-
+        group.throughput(Throughput::Elements(size as u64));
         group.bench_with_input(
             BenchmarkId::new("select", format!("{}%", ratio_percent)),
             &(packed_data.clone(), bit_mask),
