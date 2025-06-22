@@ -14,13 +14,13 @@ fn generate_test_data(size: usize, bit_width: usize) -> Vec<u64> {
 fn bench_bit_pack_different_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_pack_sizes");
 
-    let sizes = vec![1024, 10240, 102400]; // Using sizes that work with fastlanes (multiples of 1024)
+    let sizes = vec![1024, 16384, 102400]; // Using sizes that work with fastlanes (multiples of 1024)
     let bit_width = 11;
 
     for size in sizes {
         let data = generate_test_data(size, bit_width);
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Benchmark our implementation
         group.bench_with_input(BenchmarkId::new("bmi_select", size), &data, |b, data| {
             b.iter(|| bit_pack(black_box(data), black_box(bit_width)))
@@ -31,7 +31,7 @@ fn bench_bit_pack_different_sizes(c: &mut Criterion) {
             let batches = size / 1024;
             let out_batch = 16 * bit_width;
             let mut packed = vec![0u64; batches * out_batch];
-            
+
             b.iter(|| {
                 for i in 0..batches {
                     unsafe {
@@ -51,15 +51,15 @@ fn bench_bit_pack_different_sizes(c: &mut Criterion) {
 fn bench_bit_unpack_different_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_unpack_sizes");
 
-    let sizes = vec![1024, 10240, 102400]; // Using sizes that work with fastlanes
+    let sizes = vec![1024, 16384, 102400]; // Using sizes that work with fastlanes
     let bit_width = 11;
 
     for size in sizes {
         let data = generate_test_data(size, bit_width);
-        
+
         // Prepare data for our implementation
         let packed = bit_pack(&data, bit_width);
-        
+
         // Prepare data for fastlanes
         let batches = size / 1024;
         let out_batch = 16 * bit_width;
@@ -75,7 +75,7 @@ fn bench_bit_unpack_different_sizes(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Benchmark our implementation
         group.bench_with_input(
             BenchmarkId::new("bmi_select", size),
@@ -118,35 +118,41 @@ fn bench_bit_pack_different_widths(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_pack_widths");
 
     let bit_widths = vec![3, 5, 11, 15, 23, 33];
-    let size = 10240; // Multiple of 1024 for fastlanes compatibility
+    let size = 16384;
 
     for bit_width in bit_widths {
         let data = generate_test_data(size, bit_width);
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Benchmark our implementation
-        group.bench_with_input(BenchmarkId::new("bmi_select", bit_width), &data, |b, data| {
-            b.iter(|| bit_pack(black_box(data), black_box(bit_width)))
-        });
+        group.bench_with_input(
+            BenchmarkId::new("bmi_select", bit_width),
+            &data,
+            |b, data| b.iter(|| bit_pack(black_box(data), black_box(bit_width))),
+        );
 
         // Benchmark fastlanes implementation
-        group.bench_with_input(BenchmarkId::new("fastlanes", bit_width), &data, |b, data| {
-            let batches = size / 1024;
-            let out_batch = 16 * bit_width;
-            let mut packed = vec![0u64; batches * out_batch];
-            
-            b.iter(|| {
-                for i in 0..batches {
-                    unsafe {
-                        FLBitPacking::unchecked_pack(
-                            bit_width,
-                            &data[i * 1024..(i + 1) * 1024],
-                            &mut packed[i * out_batch..(i + 1) * out_batch],
-                        );
+        group.bench_with_input(
+            BenchmarkId::new("fastlanes", bit_width),
+            &data,
+            |b, data| {
+                let batches = size / 1024;
+                let out_batch = 16 * bit_width;
+                let mut packed = vec![0u64; batches * out_batch];
+
+                b.iter(|| {
+                    for i in 0..batches {
+                        unsafe {
+                            FLBitPacking::unchecked_pack(
+                                bit_width,
+                                &data[i * 1024..(i + 1) * 1024],
+                                &mut packed[i * out_batch..(i + 1) * out_batch],
+                            );
+                        }
                     }
-                }
-            })
-        });
+                })
+            },
+        );
     }
     group.finish();
 }
@@ -155,14 +161,14 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_unpack_widths");
 
     let bit_widths = vec![3, 5, 11, 15, 23, 33];
-    let size = 10240; // Multiple of 1024 for fastlanes compatibility
+    let size = 16384; // Multiple of 1024 for fastlanes compatibility
 
     for bit_width in bit_widths {
         let data = generate_test_data(size, bit_width);
-        
+
         // Prepare data for our implementation
         let packed = bit_pack(&data, bit_width);
-        
+
         // Prepare data for fastlanes
         let batches = size / 1024;
         let out_batch = 16 * bit_width;
@@ -178,7 +184,7 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Benchmark our implementation
         group.bench_with_input(
             BenchmarkId::new("bmi_select", bit_width),
@@ -248,7 +254,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
         let out_batch = 16 * bit_width;
         let mut fl_packed_data = vec![0u64; batches * out_batch];
         let mut fl_bit_mask = vec![0u64; batches * 16];
-        
+
         for i in 0..batches {
             unsafe {
                 FLBitPacking::unchecked_pack(
@@ -265,7 +271,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
         }
 
         group.throughput(Throughput::Elements(size as u64));
-        
+
         // Benchmark our implementation
         group.bench_with_input(
             BenchmarkId::new("bmi_select", format!("{}%", ratio_percent)),
