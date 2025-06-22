@@ -44,7 +44,7 @@ pub fn bit_pack(data: &[u64], bit_width: usize) -> Vec<u64> {
     out
 }
 
-fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
+pub fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
     if packed.is_empty() || bit_width == 0 || bit_width > 64 || bit_mask.is_empty() {
         return Vec::new();
     }
@@ -264,9 +264,7 @@ unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u
         if select_bitmap == 0 {
             continue;
         }
-
         let mask = masks[word_idx % bit_width];
-
         let low = _pdep_u64(select_bitmap, mask);
         let high = _pdep_u64(select_bitmap, mask.wrapping_sub(1));
         let extended = high.wrapping_sub(low);

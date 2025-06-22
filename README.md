@@ -39,7 +39,9 @@ Note: it only works on little-endian machines (x86, ARM, etc.).
 ## Benchmark
 
 ```bash
-cargo bench
+rustup default nightly  # for fastlanes comparison
+
+env RUSTFLAGS='-C target-cpu=native' cargo bench 
 ```
 
 The `select_packed` function can be 3.6x faster than best-effort baseline implementation.

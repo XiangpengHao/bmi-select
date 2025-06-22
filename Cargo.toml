@@ -7,6 +7,7 @@ edition = "2024"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+fastlanes = "0.1.8"
 
 [[bench]]
 name = "bit_pack_bench"
