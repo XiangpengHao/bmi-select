@@ -91,7 +91,7 @@ use std::arch::is_x86_feature_detected;
 /// let selected = select_packed(&packed, bit_width, &bit_mask);
 /// assert_eq!(selected, vec![0x8642]);
 ///
-/// let unpacked = bit_unpack(&selected, bit_width, 4);
+/// let unpacked: Vec<u64> = bit_unpack(&selected, bit_width, 4);
 /// assert_eq!(unpacked, vec![2, 4, 6, 8]);
 /// ```
 pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
@@ -497,16 +497,16 @@ mod tests {
     #[test]
     fn test_select_packed() {
         // Test basic selection functionality
-        let data = vec![10, 20, 30, 40, 50];
+        let data: Vec<u64> = vec![10, 20, 30, 40, 50];
         let bit_width = 8;
         let packed = bit_pack(&data, bit_width);
 
         // Create a mask that selects elements at positions 0, 2, and 4 (10, 30, 50)
-        let mask_data = vec![1, 0, 1, 0, 1]; // Select 1st, 3rd, and 5th elements
+        let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1]; // Select 1st, 3rd, and 5th elements
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked = bit_unpack(&selected_packed, bit_width, 3);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 3);
 
         assert_eq!(selected_unpacked, vec![10, 30, 50]);
     }
@@ -514,15 +514,15 @@ mod tests {
     #[test]
     fn test_select_packed_all() {
         // Test selecting all elements
-        let data = vec![1, 2, 3, 4];
+        let data: Vec<u64> = vec![1, 2, 3, 4];
         let bit_width = 4;
         let packed = bit_pack(&data, bit_width);
 
-        let mask_data = vec![1, 1, 1, 1]; // Select all elements
+        let mask_data: Vec<u64> = vec![1, 1, 1, 1]; // Select all elements
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked = bit_unpack(&selected_packed, bit_width, 4);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 4);
 
         assert_eq!(selected_unpacked, data);
     }
@@ -530,11 +530,11 @@ mod tests {
     #[test]
     fn test_select_packed_none() {
         // Test selecting no elements
-        let data = vec![1, 2, 3, 4];
+        let data: Vec<u64> = vec![1, 2, 3, 4];
         let bit_width = 4;
         let packed = bit_pack(&data, bit_width);
 
-        let mask_data = vec![0, 0, 0, 0]; // Select no elements
+        let mask_data: Vec<u64> = vec![0, 0, 0, 0]; // Select no elements
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
@@ -545,16 +545,16 @@ mod tests {
     #[test]
     fn test_select_packed_odd_bit_width() {
         // Test with a non-power-of-2 bit width
-        let data = vec![100, 200, 300, 400, 500, 600];
+        let data: Vec<u64> = vec![100, 200, 300, 400, 500, 600];
         let bit_width = 11; // 11 bits can represent values up to 2047
         let packed = bit_pack(&data, bit_width);
 
         // Select every other element
-        let mask_data = vec![1, 0, 1, 0, 1, 0];
+        let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1, 0];
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked = bit_unpack(&selected_packed, bit_width, 3);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 3);
 
         assert_eq!(selected_unpacked, vec![100, 300, 500]);
     }

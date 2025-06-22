@@ -1,95 +1,164 @@
 use crate::lane_size;
 
-/// Pack a slice of u64 values into a vector of u64 values.
-/// Each of the u64 values must be less than 2^bit_width.
+/// Private trait to seal BitPackable
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Trait for types that can be bit-packed
+///
+/// This trait is sealed and can only be implemented for the predefined unsigned integer types.
+pub trait BitPackable: Copy + Into<u64> + sealed::Sealed {
+    /// Maximum number of bits this type can represent
+    fn max_bits() -> usize;
+
+    /// Cast from u64 to this type (safe when value fits in max_bits)
+    fn from_u64(value: u64) -> Self;
+}
+
+impl sealed::Sealed for u8 {}
+impl BitPackable for u8 {
+    fn max_bits() -> usize {
+        8
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value as u8
+    }
+}
+
+impl sealed::Sealed for u16 {}
+impl BitPackable for u16 {
+    fn max_bits() -> usize {
+        16
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value as u16
+    }
+}
+
+impl sealed::Sealed for u32 {}
+impl BitPackable for u32 {
+    fn max_bits() -> usize {
+        32
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value as u32
+    }
+}
+
+impl sealed::Sealed for u64 {}
+impl BitPackable for u64 {
+    fn max_bits() -> usize {
+        64
+    }
+
+    fn from_u64(value: u64) -> Self {
+        value
+    }
+}
+
+/// Pack a slice of values into a vector of u64 values.
+/// Each of the values must be less than 2^bit_width.
 ///
 /// Example:
 /// ```
 /// use bmi_select::bit_pack;
-/// let data = vec![1, 2, 3, 4, 5, 6, 7, 8];
+/// let data: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
 /// let bit_width = 4;
 /// let packed = bit_pack(&data, bit_width);
 /// assert_eq!(packed, vec![0x87654321]);
 /// ```
-pub fn bit_pack(data: &[u64], bit_width: usize) -> Vec<u64> {
-    if data.is_empty() || bit_width == 0 || bit_width > lane_size::<u64>() {
+pub fn bit_pack<T: BitPackable>(data: &[T], bit_width: usize) -> Vec<u64> {
+    if data.is_empty() || bit_width == 0 || bit_width > T::max_bits() {
         return Vec::new();
     }
 
     let total_bits = data.len() * bit_width;
-    let total_u64s = total_bits.div_ceil(lane_size::<u64>()); // Round up division
 
-    let mut out = vec![0u64; total_u64s];
+    let mut out = vec![0u64; total_bits.div_ceil(lane_size::<u64>())];
 
-    for (i, &value) in data.iter().enumerate() {
-        let bit_offset = i * bit_width;
-        let out_index = bit_offset / lane_size::<u64>();
-        let bit_pos = bit_offset % lane_size::<u64>();
+    unsafe {
+        let mut out_ptr = out.as_mut_ptr();
+        let mut word: u64 = 0;
+        let mut bits_in_word = 0usize;
 
-        if bit_pos + bit_width <= lane_size::<u64>() {
-            unsafe {
-                *out.get_unchecked_mut(out_index) |= value << bit_pos;
+        for &value in data {
+            let u64_value: u64 = value.into();
+            word |= u64_value << bits_in_word;
+            bits_in_word += bit_width;
+
+            if bits_in_word >= 64 {
+                *out_ptr = word;
+                out_ptr = out_ptr.add(1);
+
+                if bits_in_word > 64 {
+                    word = u64_value >> (bit_width - (bits_in_word - 64));
+                    bits_in_word -= 64;
+                } else {
+                    word = 0;
+                    bits_in_word = 0;
+                }
             }
-        } else {
-            let bits_in_current = lane_size::<u64>() - bit_pos;
-            unsafe {
-                *out.get_unchecked_mut(out_index) |= value << bit_pos;
-                *out.get_unchecked_mut(out_index + 1) |= value >> bits_in_current;
-            }
+        }
+
+        if bits_in_word > 0 {
+            *out_ptr = word;
         }
     }
 
     out
 }
 
-/// Unpack a vector of u64 values into a slice of u64 values.
-/// Each of the u64 values must be less than 2^bit_width.
+/// Unpack a vector of u64 values into a vector of values of type T.
+/// Each of the values must be less than 2^bit_width.
 ///
 /// Example:
 /// ```
 /// use bmi_select::bit_unpack;
 /// let packed = vec![0x87654321];
 /// let bit_width = 4;
-/// let unpacked = bit_unpack(&packed, bit_width, 8);
+/// let unpacked: Vec<u32> = bit_unpack(&packed, bit_width, 8);
 /// assert_eq!(unpacked, vec![1, 2, 3, 4, 5, 6, 7, 8]);
 /// ```
-pub fn bit_unpack(packed_data: &[u64], bit_width: usize, original_count: usize) -> Vec<u64> {
-    if packed_data.is_empty() || bit_width == 0 || bit_width > 64 || original_count == 0 {
+pub fn bit_unpack<T: BitPackable>(
+    packed_data: &[u64],
+    bit_width: usize,
+    original_count: usize,
+) -> Vec<T> {
+    if packed_data.is_empty() || bit_width == 0 || bit_width > T::max_bits() || original_count == 0
+    {
         return Vec::new();
     }
 
-    let mask = (1u64 << bit_width) - 1;
-    let mut result = Vec::with_capacity(original_count);
-    let mut bit_offset = 0;
+    let mask = if bit_width == 64 {
+        u128::MAX
+    } else {
+        (1u128 << bit_width) - 1
+    };
 
-    for _ in 0..original_count {
-        let u64_index = bit_offset / 64;
-        let bit_pos = bit_offset % 64;
+    let mut result = vec![T::from_u64(0); original_count];
 
-        if u64_index >= packed_data.len() {
-            break;
+    unsafe {
+        let mut out_ptr = result.as_mut_ptr();
+        let mut in_ptr = packed_data.as_ptr();
+        let mut buffer: u128 = *in_ptr as u128;
+        in_ptr = in_ptr.add(1);
+        let mut bits_available = 64usize;
+
+        for _ in 0..original_count {
+            if bits_available < bit_width {
+                buffer |= (*in_ptr as u128) << bits_available;
+                in_ptr = in_ptr.add(1);
+                bits_available += 64;
+            }
+            *out_ptr = T::from_u64((buffer & mask) as u64);
+            out_ptr = out_ptr.add(1);
+            buffer >>= bit_width;
+            bits_available -= bit_width;
         }
-
-        let value = if bit_pos + bit_width <= 64 {
-            // Value fits entirely within current u64
-            (packed_data[u64_index] >> bit_pos) & mask
-        } else {
-            // Value spans across two u64s
-            let bits_in_current = 64 - bit_pos;
-            let bits_in_next = bit_width - bits_in_current;
-
-            let lower_bits = packed_data[u64_index] >> bit_pos;
-            let upper_bits = if u64_index + 1 < packed_data.len() {
-                (packed_data[u64_index + 1] & ((1u64 << bits_in_next) - 1)) << bits_in_current
-            } else {
-                0
-            };
-
-            (lower_bits | upper_bits) & mask
-        };
-
-        result.push(value);
-        bit_offset += bit_width;
     }
 
     result
@@ -100,14 +169,14 @@ mod tests {
     use super::*;
 
     fn test_bit_pack_round_trip(data: &Vec<u64>, bit_width: usize) {
-        let packed = bit_pack(&data, bit_width);
-        let unpacked = bit_unpack(&packed, bit_width, data.len());
+        let packed = bit_pack(data, bit_width);
+        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width, data.len());
         assert_eq!(data, &unpacked);
     }
 
     #[test]
     fn test_bit_pack_unpack() {
-        let data = (0..200).collect();
+        let data: Vec<u64> = (0..200).map(|x| x as u64).collect();
 
         for bit_width in 8..64 {
             test_bit_pack_round_trip(&data, bit_width);
@@ -117,11 +186,11 @@ mod tests {
     #[test]
     fn test_bit_pack_unpack_33_bit() {
         // Test the inefficient case mentioned by the user
-        let data = vec![1, 2, 3, 4, 5];
+        let data: Vec<u64> = vec![1, 2, 3, 4, 5];
         let bit_width = 33;
 
         let packed = bit_pack(&data, bit_width);
-        let unpacked = bit_unpack(&packed, bit_width, data.len());
+        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width, data.len());
 
         assert_eq!(data, unpacked);
 
@@ -134,11 +203,11 @@ mod tests {
     #[test]
     fn test_bit_pack_unpack_7_bit() {
         // Test odd bit width that doesn't divide evenly into 64
-        let data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let bit_width = 7;
 
         let packed = bit_pack(&data, bit_width);
-        let unpacked = bit_unpack(&packed, bit_width, data.len());
+        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width, data.len());
 
         assert_eq!(data, unpacked);
     }
@@ -147,18 +216,18 @@ mod tests {
     fn test_empty_data() {
         let data: Vec<u64> = vec![];
         let packed = bit_pack(&data, 8);
-        let unpacked = bit_unpack(&packed, 8, 0);
+        let unpacked: Vec<u64> = bit_unpack(&packed, 8, 0);
 
         assert_eq!(data, unpacked);
     }
 
     #[test]
     fn test_single_value() {
-        let data = vec![42];
+        let data: Vec<u64> = vec![42];
         let bit_width = 8;
 
         let packed = bit_pack(&data, bit_width);
-        let unpacked = bit_unpack(&packed, bit_width, data.len());
+        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width, data.len());
 
         assert_eq!(data, unpacked);
     }
@@ -178,5 +247,26 @@ mod tests {
 
         // This should be much less than storing 100 full u64s
         assert!(packed.len() < 100);
+    }
+
+    #[test]
+    fn test_different_types() {
+        // Test u8
+        let data_u8: Vec<u8> = vec![1, 2, 3, 4, 5];
+        let packed_u8 = bit_pack(&data_u8, 4);
+        let unpacked_u8: Vec<u8> = bit_unpack(&packed_u8, 4, data_u8.len());
+        assert_eq!(data_u8, unpacked_u8);
+
+        // Test u16
+        let data_u16: Vec<u16> = vec![100, 200, 300, 400, 500];
+        let packed_u16 = bit_pack(&data_u16, 10);
+        let unpacked_u16: Vec<u16> = bit_unpack(&packed_u16, 10, data_u16.len());
+        assert_eq!(data_u16, unpacked_u16);
+
+        // Test u32
+        let data_u32: Vec<u32> = vec![1000, 2000, 3000, 4000, 5000];
+        let packed_u32 = bit_pack(&data_u32, 16);
+        let unpacked_u32: Vec<u32> = bit_unpack(&packed_u32, 16, data_u32.len());
+        assert_eq!(data_u32, unpacked_u32);
     }
 }

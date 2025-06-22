@@ -82,7 +82,7 @@ fn bench_bit_unpack_different_sizes(c: &mut Criterion) {
             &(packed, size),
             |b, (packed, original_count)| {
                 b.iter(|| {
-                    bit_unpack(
+                    bit_unpack::<u64>(
                         black_box(packed),
                         black_box(bit_width),
                         black_box(*original_count),
@@ -191,7 +191,7 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
             &(packed, size),
             |b, (packed, original_count)| {
                 b.iter(|| {
-                    bit_unpack(
+                    bit_unpack::<u64>(
                         black_box(packed),
                         black_box(bit_width),
                         black_box(*original_count),
