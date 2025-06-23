@@ -133,7 +133,8 @@ unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u
 
     let masks = get_precomputed_masks(bit_width);
 
-    let mut out: Vec<u64> = Vec::new();
+    let selected_count: usize = bit_mask.iter().map(|m| m.count_ones() as usize).sum();
+    let mut out = vec![0u64; (selected_count * bit_width).div_ceil(64)];
     let mut out_bit_offset: usize = 0;
 
     for (word_idx, &values_word) in packed.iter().enumerate() {
@@ -176,20 +177,9 @@ unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u
         let out_u64_idx = out_bit_offset / 64;
         let bit_pos = out_bit_offset % 64;
 
-        if out_u64_idx >= out.len() {
-            out.push(0);
-        }
-
         let capacity = 64 - bit_pos;
-
-        if bits_extracted <= capacity {
-            out[out_u64_idx] |= extracted << bit_pos;
-        } else {
-            out[out_u64_idx] |= extracted << bit_pos;
-
-            if out_u64_idx + 1 >= out.len() {
-                out.push(0);
-            }
+        out[out_u64_idx] |= extracted << bit_pos;
+        if bits_extracted > capacity {
             out[out_u64_idx + 1] |= extracted >> capacity;
         }
 
