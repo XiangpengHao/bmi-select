@@ -11,111 +11,8 @@ fn generate_test_data(size: usize, bit_width: usize) -> Vec<u64> {
     (0..size).map(|i| (i as u64) % max_value).collect()
 }
 
-fn bench_bit_pack_different_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bit_pack_sizes");
-
-    let sizes = vec![1024, 16384, 102400]; // Using sizes that work with fastlanes (multiples of 1024)
-    let bit_width = 11;
-
-    for size in sizes {
-        let data = generate_test_data(size, bit_width);
-        group.throughput(Throughput::Elements(size as u64));
-
-        // Benchmark our implementation
-        group.bench_with_input(BenchmarkId::new("bmi_select", size), &data, |b, data| {
-            b.iter(|| bit_pack(black_box(data), black_box(bit_width)))
-        });
-
-        // Benchmark fastlanes implementation
-        group.bench_with_input(BenchmarkId::new("fastlanes", size), &data, |b, data| {
-            let batches = size / 1024;
-            let out_batch = 16 * bit_width;
-            let mut packed = vec![0u64; batches * out_batch];
-
-            b.iter(|| {
-                for i in 0..batches {
-                    unsafe {
-                        FLBitPacking::unchecked_pack(
-                            bit_width,
-                            &data[i * 1024..(i + 1) * 1024],
-                            &mut packed[i * out_batch..(i + 1) * out_batch],
-                        );
-                    }
-                }
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_bit_unpack_different_sizes(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bit_unpack_sizes");
-
-    let sizes = vec![1024, 16384, 102400]; // Using sizes that work with fastlanes
-    let bit_width = 11;
-
-    for size in sizes {
-        let data = generate_test_data(size, bit_width);
-
-        // Prepare data for our implementation
-        let packed = bit_pack(&data, bit_width);
-
-        // Prepare data for fastlanes
-        let batches = size / 1024;
-        let out_batch = 16 * bit_width;
-        let mut fl_packed = vec![0u64; batches * out_batch];
-        for i in 0..batches {
-            unsafe {
-                FLBitPacking::unchecked_pack(
-                    bit_width,
-                    &data[i * 1024..(i + 1) * 1024],
-                    &mut fl_packed[i * out_batch..(i + 1) * out_batch],
-                );
-            }
-        }
-
-        group.throughput(Throughput::Elements(size as u64));
-
-        // Benchmark our implementation
-        group.bench_with_input(
-            BenchmarkId::new("bmi_select", size),
-            &(packed, size),
-            |b, (packed, original_count)| {
-                b.iter(|| {
-                    bit_unpack::<u64>(
-                        black_box(packed),
-                        black_box(bit_width),
-                        black_box(*original_count),
-                    )
-                })
-            },
-        );
-
-        // Benchmark fastlanes implementation
-        group.bench_with_input(
-            BenchmarkId::new("fastlanes", size),
-            &fl_packed,
-            |b, packed| {
-                let mut unpacked = vec![0u64; size];
-                b.iter(|| {
-                    for i in 0..batches {
-                        unsafe {
-                            FLBitPacking::unchecked_unpack(
-                                bit_width,
-                                &packed[i * out_batch..(i + 1) * out_batch],
-                                &mut unpacked[i * 1024..(i + 1) * 1024],
-                            );
-                        }
-                    }
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
 fn bench_bit_pack_different_widths(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bit_pack_widths");
+    let mut group = c.benchmark_group("bit_pack");
 
     let bit_widths = vec![3, 5, 11, 15, 23, 33];
     let size = 16384;
@@ -158,7 +55,7 @@ fn bench_bit_pack_different_widths(c: &mut Criterion) {
 }
 
 fn bench_bit_unpack_different_widths(c: &mut Criterion) {
-    let mut group = c.benchmark_group("bit_unpack_widths");
+    let mut group = c.benchmark_group("bit_unpack");
 
     let bit_widths = vec![3, 5, 11, 15, 23, 33];
     let size = 16384; // Multiple of 1024 for fastlanes compatibility
@@ -224,7 +121,7 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
 }
 
 fn bench_select_packed_selection_ratios(c: &mut Criterion) {
-    let mut group = c.benchmark_group("select_packed_ratios");
+    let mut group = c.benchmark_group("select_packed");
 
     let size = 16384; // Multiple of 1024 for fastlanes compatibility
     let bit_width = 7;
@@ -346,8 +243,6 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_bit_pack_different_sizes,
-    bench_bit_unpack_different_sizes,
     bench_bit_pack_different_widths,
     bench_bit_unpack_different_widths,
     bench_select_packed_selection_ratios,

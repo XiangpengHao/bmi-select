@@ -581,7 +581,7 @@ mod tests {
 
             let generic = select_packed_fallback(&packed, bw, &bit_mask);
             let bmi = select_packed(&packed, bw, &bit_mask);
-            assert_eq!(generic, bmi, "Mismatch with bit_width={bw}");
+            assert_eq!(generic, bmi);
         }
     }
 }

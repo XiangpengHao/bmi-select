@@ -10,15 +10,15 @@ mod sealed {
 /// This trait is sealed and can only be implemented for the predefined unsigned integer types.
 pub trait BitPackable: Copy + Into<u64> + sealed::Sealed {
     /// Maximum number of bits this type can represent
-    fn max_bits() -> usize;
+    fn bit_width() -> usize;
 
-    /// Cast from u64 to this type (safe when value fits in max_bits)
+    /// Cast from u64 to this type (safe when value fits in bit_width)
     fn from_u64(value: u64) -> Self;
 }
 
 impl sealed::Sealed for u8 {}
 impl BitPackable for u8 {
-    fn max_bits() -> usize {
+    fn bit_width() -> usize {
         8
     }
 
@@ -29,7 +29,7 @@ impl BitPackable for u8 {
 
 impl sealed::Sealed for u16 {}
 impl BitPackable for u16 {
-    fn max_bits() -> usize {
+    fn bit_width() -> usize {
         16
     }
 
@@ -40,7 +40,7 @@ impl BitPackable for u16 {
 
 impl sealed::Sealed for u32 {}
 impl BitPackable for u32 {
-    fn max_bits() -> usize {
+    fn bit_width() -> usize {
         32
     }
 
@@ -51,7 +51,7 @@ impl BitPackable for u32 {
 
 impl sealed::Sealed for u64 {}
 impl BitPackable for u64 {
-    fn max_bits() -> usize {
+    fn bit_width() -> usize {
         64
     }
 
@@ -72,7 +72,7 @@ impl BitPackable for u64 {
 /// assert_eq!(packed, vec![0x87654321]);
 /// ```
 pub fn bit_pack<T: BitPackable>(data: &[T], bit_width: usize) -> Vec<u64> {
-    if data.is_empty() || bit_width == 0 || bit_width > T::max_bits() {
+    if data.is_empty() || bit_width == 0 || bit_width > T::bit_width() {
         return Vec::new();
     }
 
@@ -128,7 +128,7 @@ pub fn bit_unpack<T: BitPackable>(
     bit_width: usize,
     original_count: usize,
 ) -> Vec<T> {
-    if packed_data.is_empty() || bit_width == 0 || bit_width > T::max_bits() || original_count == 0
+    if packed_data.is_empty() || bit_width == 0 || bit_width > T::bit_width() || original_count == 0
     {
         return Vec::new();
     }
