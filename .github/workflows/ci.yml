@@ -6,8 +6,9 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
+  deployments: write
   id-token: write
 
 concurrency:
@@ -30,7 +31,15 @@ jobs:
       - name: Test
         run: cargo test
       - name: Benchmark
-        run: RUSTFLAGS='-C target-cpu=native' cargo bench
+        run: RUSTFLAGS='-C target-cpu=native' cargo bench -- --output-format bencher | tee benchmark-output.txt
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: BMI Select Benchmark
+          tool: 'cargo'
+          output-file-path: benchmark-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
       - name: Upload benchmark artifact
         uses: actions/upload-pages-artifact@v3
         with:
