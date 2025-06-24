@@ -15,7 +15,7 @@ assert_eq!(packed, vec![0x87654321]);
 use bmi_select::bit_unpack;
 let packed = vec![0x87654321];
 let unpacked = bit_unpack(&packed, 4);
-assert_eq!(unpacked, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+assert_eq!(unpacked[..8], vec![1, 2, 3, 4, 5, 6, 7, 8]);
 ```
 
 ### Bit selection
@@ -24,7 +24,7 @@ use bmi_select::select_packed;
 let packed   = vec![0x87654321];
 let bit_mask = vec![0b10101010];
 let selected = select_packed(&packed, 4, &bit_mask);
-assert_eq!(selected, vec![0x8642]);
+assert_eq!(selected[..4], vec![0x8642]);
 ```
 
 ## Features

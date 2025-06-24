@@ -91,8 +91,8 @@ use std::arch::is_x86_feature_detected;
 /// let selected = select_packed(&packed, bit_width, &bit_mask);
 /// assert_eq!(selected, vec![0x8642]);
 ///
-/// let unpacked: Vec<u64> = bit_unpack(&selected, bit_width, 4);
-/// assert_eq!(unpacked, vec![2, 4, 6, 8]);
+/// let unpacked: Vec<u64> = bit_unpack(&selected, bit_width);
+/// assert_eq!(unpacked[..4], vec![2, 4, 6, 8]);
 /// ```
 pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
     // if BMI2 is unavailable, defer to the generic version.
@@ -496,9 +496,9 @@ mod tests {
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 3);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
 
-        assert_eq!(selected_unpacked, vec![10, 30, 50]);
+        assert_eq!(selected_unpacked[..3], vec![10, 30, 50]);
     }
 
     #[test]
@@ -512,9 +512,9 @@ mod tests {
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 4);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
 
-        assert_eq!(selected_unpacked, data);
+        assert_eq!(selected_unpacked[..4], data);
     }
 
     #[test]
@@ -544,9 +544,9 @@ mod tests {
         let bit_mask = bit_pack(&mask_data, 1);
 
         let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width, 3);
+        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
 
-        assert_eq!(selected_unpacked, vec![100, 300, 500]);
+        assert_eq!(selected_unpacked[..3], vec![100, 300, 500]);
     }
 
     #[test]

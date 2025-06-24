@@ -1,14 +1,14 @@
-use bmi_select::{bit_pack, bit_unpack, select_packed};
+use bmi_select::{BitPackable, bit_pack, bit_unpack, select_packed};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use fastlanes::BitPacking as FLBitPacking;
 
-fn generate_test_data(size: usize, bit_width: usize) -> Vec<u64> {
+fn generate_test_data<T: BitPackable>(size: usize, bit_width: usize) -> Vec<T> {
     let max_value = if bit_width >= 64 {
         u64::MAX
     } else {
         (1u64 << bit_width) - 1
     };
-    (0..size).map(|i| (i as u64) % max_value).collect()
+    (0..size).map(|i| T::from_u64((i as u64) % max_value)).collect()
 }
 
 fn bench_bit_pack_different_widths(c: &mut Criterion) {
@@ -58,7 +58,7 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
     let mut group = c.benchmark_group("bit_unpack");
 
     let bit_widths = vec![3, 5, 11, 15, 23, 33];
-    let size = 16384; // Multiple of 1024 for fastlanes compatibility
+    let size = 16384;
 
     for bit_width in bit_widths {
         let data = generate_test_data(size, bit_width);
@@ -86,14 +86,8 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("bmi_select", bit_width),
             &(packed, size),
-            |b, (packed, original_count)| {
-                b.iter(|| {
-                    bit_unpack::<u64>(
-                        black_box(packed),
-                        black_box(bit_width),
-                        black_box(*original_count),
-                    )
-                })
+            |b, (packed, _original_count)| {
+                b.iter(|| bit_unpack::<u64>(black_box(packed), black_box(bit_width)))
             },
         );
 
