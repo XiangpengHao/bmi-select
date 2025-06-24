@@ -337,7 +337,7 @@ mod tests {
         }
         let max_value: u64 = 1 << bit_width;
         let data: Vec<T> = (0..200)
-            .map(|x| T::from_u64(x as u64 % max_value as u64))
+            .map(|x| T::from_u64(x as u64 % max_value))
             .collect();
         let packed = bit_pack(&data, bit_width);
         let unpacked: Vec<T> = bit_unpack(&packed, bit_width);
@@ -474,8 +474,7 @@ mod tests {
             assert_eq!(
                 data,
                 unpacked_original[..data.len()],
-                "Original failed for bit_width {}",
-                bit_width
+                "Original failed for bit_width {bit_width}"
             );
         }
     }
