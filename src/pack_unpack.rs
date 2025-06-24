@@ -131,23 +131,21 @@ pub fn bit_unpack<T: BitPackable>(packed_data: &[u64], bit_width: usize) -> Vec<
 
     // Try to use optimized unpack functions for specific types and conditions
     match T::BIT_WIDTH {
-        8 => {
-            return unsafe { std::mem::transmute(optimized_unpack_u8(packed_data, bit_width)) };
-        }
-        16 => {
-            return unsafe { std::mem::transmute(optimized_unpack_u16(packed_data, bit_width)) };
-        }
-        32 => {
-            return unsafe { std::mem::transmute(optimized_unpack_u32(packed_data, bit_width)) };
-        }
-        64 => {
-            return unsafe { std::mem::transmute(optimized_unpack_u64(packed_data, bit_width)) };
-        }
+        8 => unsafe {
+            std::mem::transmute::<Vec<u8>, Vec<T>>(optimized_unpack_u8(packed_data, bit_width))
+        },
+        16 => unsafe {
+            std::mem::transmute::<Vec<u16>, Vec<T>>(optimized_unpack_u16(packed_data, bit_width))
+        },
+        32 => unsafe {
+            std::mem::transmute::<Vec<u32>, Vec<T>>(optimized_unpack_u32(packed_data, bit_width))
+        },
+        64 => unsafe {
+            std::mem::transmute::<Vec<u64>, Vec<T>>(optimized_unpack_u64(packed_data, bit_width))
+        },
         _ => panic!("Unsupported bit width: {}", T::BIT_WIDTH),
     }
 }
-
-
 
 fn bit_unpack_impl<T: BitPackable>(packed_data: &[u64], bit_width: usize) -> Vec<T> {
     if packed_data.is_empty() || bit_width == 0 {
@@ -289,7 +287,7 @@ macro_rules! generate_optimized_unpack {
 
             let chunks = original_count / LANE_SIZE;
             let remainder = original_count % LANE_SIZE;
-            let bytes_per_chunk = (LANE_SIZE * bit_width + 7) / 8; // Round up to next byte
+            let bytes_per_chunk = (LANE_SIZE * bit_width).div_ceil(8);
 
             // Pre-allocate space for all chunks
             unsafe {
@@ -303,7 +301,8 @@ macro_rules! generate_optimized_unpack {
                 unsafe {
                     let chunk_ptr = result.as_mut_ptr().add(result_offset);
                     let chunk_slice = std::slice::from_raw_parts_mut(chunk_ptr, LANE_SIZE);
-                    let chunk_array: &mut [$t; LANE_SIZE] = chunk_slice.try_into().unwrap_unchecked();
+                    let chunk_array: &mut [$t; LANE_SIZE] =
+                        chunk_slice.try_into().unwrap_unchecked();
                     $unpack_fn(&packed_bytes[start_byte..], chunk_array, bit_width);
                 }
             }

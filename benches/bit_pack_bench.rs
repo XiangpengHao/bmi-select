@@ -8,7 +8,9 @@ fn generate_test_data<T: BitPackable>(size: usize, bit_width: usize) -> Vec<T> {
     } else {
         (1u64 << bit_width) - 1
     };
-    (0..size).map(|i| T::from_u64((i as u64) % max_value)).collect()
+    (0..size)
+        .map(|i| T::from_u64((i as u64) % max_value))
+        .collect()
 }
 
 fn bench_bit_pack_different_widths(c: &mut Criterion) {
