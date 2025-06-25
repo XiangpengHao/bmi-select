@@ -1,4 +1,3 @@
-use crate::lane_size;
 use std::fmt::Debug;
 
 /// Private trait to seal BitPackable
@@ -57,26 +56,20 @@ impl BitPackable for u64 {
     }
 }
 
-/// Pack a slice of values into a vector of u64 values.
+/// Pack a slice of values into an output buffer of u64 values.
 /// Each of the values must be less than 2^bit_width.
+/// The output buffer must have enough space to hold the packed data.
 ///
 /// Example:
 /// ```
 /// use bmi_select::bit_pack;
 /// let data: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
 /// let bit_width = 4;
-/// let packed = bit_pack(&data, bit_width);
-/// assert_eq!(packed, vec![0x87654321]);
+/// let mut out = vec![0u64; 1];
+/// bit_pack(&data, bit_width, &mut out);
+/// assert_eq!(out, vec![0x87654321]);
 /// ```
-pub fn bit_pack<T: BitPackable>(data: &[T], bit_width: usize) -> Vec<u64> {
-    if data.is_empty() || bit_width == 0 || bit_width > T::BIT_WIDTH {
-        return Vec::new();
-    }
-
-    let total_bits = data.len() * bit_width;
-
-    let mut out = vec![0u64; total_bits.div_ceil(lane_size::<u64>())];
-
+pub fn bit_pack<T: BitPackable>(data: &[T], bit_width: usize, out: &mut [u64]) {
     unsafe {
         let mut out_ptr = out.as_mut_ptr();
         let mut word: u64 = 0;
@@ -105,94 +98,44 @@ pub fn bit_pack<T: BitPackable>(data: &[T], bit_width: usize) -> Vec<u64> {
             *out_ptr = word;
         }
     }
-
-    out
 }
 
-/// Unpack a vector of u64 values into a vector of values of type T.
+/// Unpack a vector of u64 values into an output buffer of values of type T.
 /// Each of the values must be less than 2^bit_width.
+/// The output buffer must have enough space to hold the unpacked data.
 ///
 /// Example:
 /// ```
 /// use bmi_select::bit_unpack;
 /// let packed = vec![0x87654321];
 /// let bit_width = 4;
-/// let unpacked: Vec<u32> = bit_unpack(&packed, bit_width);
-/// assert_eq!(unpacked[..8], vec![1, 2, 3, 4, 5, 6, 7, 8]);
+/// let mut out = vec![0u32; 8];
+/// bit_unpack(&packed, bit_width, &mut out);
+/// assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
 /// ```
-pub fn bit_unpack<T: BitPackable>(packed_data: &[u64], bit_width: usize) -> Vec<T> {
-    if packed_data.is_empty() || bit_width == 0 || bit_width > T::BIT_WIDTH {
-        return Vec::new();
-    }
-
-    if bit_width > T::BIT_WIDTH {
-        panic!("bit_width must be less than or equal to the bit width of the type");
-    }
-
+pub fn bit_unpack<T: BitPackable>(packed_data: &[u64], bit_width: usize, out: &mut [T]) {
     // Try to use optimized unpack functions for specific types and conditions
     match T::BIT_WIDTH {
         8 => unsafe {
-            std::mem::transmute::<Vec<u8>, Vec<T>>(optimized_unpack_u8(packed_data, bit_width))
+            let out_u8 = std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, out.len());
+            optimized_unpack_u8_into(packed_data, bit_width, out_u8);
         },
         16 => unsafe {
-            std::mem::transmute::<Vec<u16>, Vec<T>>(optimized_unpack_u16(packed_data, bit_width))
+            let out_u16 = std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u16, out.len());
+            optimized_unpack_u16_into(packed_data, bit_width, out_u16);
         },
         32 => unsafe {
-            std::mem::transmute::<Vec<u32>, Vec<T>>(optimized_unpack_u32(packed_data, bit_width))
+            let out_u32 = std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u32, out.len());
+            optimized_unpack_u32_into(packed_data, bit_width, out_u32);
         },
         64 => unsafe {
-            std::mem::transmute::<Vec<u64>, Vec<T>>(optimized_unpack_u64(packed_data, bit_width))
+            let out_u64 = std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u64, out.len());
+            optimized_unpack_u64_into(packed_data, bit_width, out_u64);
         },
-        _ => panic!("Unsupported bit width: {}", T::BIT_WIDTH),
+        _ => {
+            unreachable!("unsupported bit width: {}", T::BIT_WIDTH);
+        }
     }
-}
-
-fn bit_unpack_impl<T: BitPackable>(packed_data: &[u64], bit_width: usize) -> Vec<T> {
-    if packed_data.is_empty() || bit_width == 0 {
-        return Vec::new();
-    }
-
-    // Calculate how many values we can decode from the available packed data
-    let total_bits = packed_data.len() * 64;
-    let value_count = total_bits / bit_width;
-
-    let mask = if bit_width == 64 {
-        u64::MAX
-    } else {
-        (1u64 << bit_width) - 1
-    };
-
-    let mut result = Vec::with_capacity(value_count);
-    let mut bit_position = 0usize;
-
-    for _ in 0..value_count {
-        // Calculate which u64 and which bit position within that u64
-        let word_index = bit_position / 64;
-        let bit_offset = bit_position % 64;
-
-        let value = if bit_offset + bit_width <= 64 {
-            // Value fits entirely within one u64
-            let word = packed_data.get(word_index).copied().unwrap_or(0);
-            (word >> bit_offset) & mask
-        } else {
-            // Value spans across two u64s
-            let current_word = packed_data.get(word_index).copied().unwrap_or(0);
-            let next_word = packed_data.get(word_index + 1).copied().unwrap_or(0);
-
-            let bits_from_current = 64 - bit_offset;
-            let bits_from_next = bit_width - bits_from_current;
-
-            let low_part = current_word >> bit_offset;
-            let high_part = (next_word & ((1u64 << bits_from_next) - 1)) << bits_from_current;
-
-            (low_part | high_part) & mask
-        };
-
-        result.push(T::from_u64(value));
-        bit_position += bit_width;
-    }
-
-    result
 }
 
 /// Macro that generates an unpack function taking the number of bits as a const generic
@@ -272,34 +215,61 @@ unpack!(unpack16, u16, 2, 16);
 unpack!(unpack32, u32, 4, 32);
 unpack!(unpack64, u64, 8, 64);
 
-/// Macro to generate optimized unpack functions for each type
-macro_rules! generate_optimized_unpack {
+/// Buffer-based version of bit_unpack_impl
+fn bit_unpack_impl_into<T: BitPackable>(packed_data: &[u64], bit_width: usize, out: &mut [T]) {
+    let mask = if bit_width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << bit_width) - 1
+    };
+
+    let mut bit_position = 0usize;
+
+    for i in 0..out.len() {
+        let word_index = bit_position / 64;
+        let bit_offset = bit_position % 64;
+
+        let value = if bit_offset + bit_width <= 64 {
+            let word = packed_data.get(word_index).copied().unwrap_or(0);
+            (word >> bit_offset) & mask
+        } else {
+            let current_word = packed_data.get(word_index).copied().unwrap_or(0);
+            let next_word = packed_data.get(word_index + 1).copied().unwrap_or(0);
+
+            let bits_from_current = 64 - bit_offset;
+            let bits_from_next = bit_width - bits_from_current;
+
+            let low_part = current_word >> bit_offset;
+            let high_part = (next_word & ((1u64 << bits_from_next) - 1)) << bits_from_current;
+
+            (low_part | high_part) & mask
+        };
+
+        out[i] = T::from_u64(value);
+        bit_position += bit_width;
+    }
+}
+
+/// Macro to generate optimized buffer-based unpack functions for each type
+macro_rules! generate_optimized_unpack_into {
     ($name:ident, $t:ty, $lane_size:literal, $unpack_fn:ident) => {
-        fn $name(packed_data: &[u64], bit_width: usize) -> Vec<$t> {
+        fn $name(packed_data: &[u64], bit_width: usize, out: &mut [$t]) {
             const LANE_SIZE: usize = $lane_size;
 
-            let original_count = packed_data.len() * 64 / bit_width;
-
-            let mut result: Vec<$t> = Vec::with_capacity(original_count);
             let packed_bytes = unsafe {
                 std::slice::from_raw_parts(packed_data.as_ptr() as *const u8, packed_data.len() * 8)
             };
 
-            let chunks = original_count / LANE_SIZE;
-            let remainder = original_count % LANE_SIZE;
+            let chunks = out.len() / LANE_SIZE;
+            let remainder = out.len() % LANE_SIZE;
             let bytes_per_chunk = (LANE_SIZE * bit_width).div_ceil(8);
-
-            // Pre-allocate space for all chunks
-            unsafe {
-                result.set_len(chunks * LANE_SIZE);
-            }
 
             for i in 0..chunks {
                 let start_byte = i * bytes_per_chunk;
                 let result_offset = i * LANE_SIZE;
 
                 unsafe {
-                    let chunk_ptr = result.as_mut_ptr().add(result_offset);
+                    let chunk_ptr = out.as_mut_ptr().add(result_offset);
                     let chunk_slice = std::slice::from_raw_parts_mut(chunk_ptr, LANE_SIZE);
                     let chunk_array: &mut [$t; LANE_SIZE] =
                         chunk_slice.try_into().unwrap_unchecked();
@@ -307,25 +277,22 @@ macro_rules! generate_optimized_unpack {
                 }
             }
 
-            // Handle remainder with original implementation
             if remainder > 0 {
                 let remaining_start = chunks * LANE_SIZE;
                 let remaining_packed_start = (remaining_start * bit_width) / 64;
                 let remaining_packed = &packed_data[remaining_packed_start..];
-                let remaining_unpacked: Vec<$t> = bit_unpack_impl(remaining_packed, bit_width);
-                result.extend(remaining_unpacked);
+                let remaining_out = &mut out[remaining_start..];
+                bit_unpack_impl_into(remaining_packed, bit_width, remaining_out);
             }
-
-            result
         }
     };
 }
 
-// Generate the optimized unpack functions
-generate_optimized_unpack!(optimized_unpack_u8, u8, 8, unpack8);
-generate_optimized_unpack!(optimized_unpack_u16, u16, 16, unpack16);
-generate_optimized_unpack!(optimized_unpack_u32, u32, 32, unpack32);
-generate_optimized_unpack!(optimized_unpack_u64, u64, 64, unpack64);
+// Generate the optimized buffer-based unpack functions
+generate_optimized_unpack_into!(optimized_unpack_u8_into, u8, 8, unpack8);
+generate_optimized_unpack_into!(optimized_unpack_u16_into, u16, 16, unpack16);
+generate_optimized_unpack_into!(optimized_unpack_u32_into, u32, 32, unpack32);
+generate_optimized_unpack_into!(optimized_unpack_u64_into, u64, 64, unpack64);
 
 #[cfg(test)]
 mod tests {
@@ -339,9 +306,12 @@ mod tests {
         let data: Vec<T> = (0..200)
             .map(|x| T::from_u64(x as u64 % max_value))
             .collect();
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<T> = bit_unpack(&packed, bit_width);
-        assert_eq!(data, &unpacked[..data.len()]);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![T::from_u64(0); data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
+        assert_eq!(data, unpacked);
     }
 
     #[test]
@@ -360,15 +330,18 @@ mod tests {
         let data: Vec<u64> = vec![1, 2, 3, 4, 5];
         let bit_width = 33;
 
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![0u64; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
 
         assert_eq!(data, unpacked);
 
         // Verify we're using space efficiently
         let expected_bits = data.len() * bit_width; // 5 * 33 = 165 bits
         let expected_u64s = expected_bits.div_ceil(64); // 3 u64s
-        assert_eq!(packed.len(), expected_u64s);
+        assert_eq!(out.len(), expected_u64s);
     }
 
     #[test]
@@ -377,17 +350,22 @@ mod tests {
         let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let bit_width = 7;
 
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![0u64; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
 
-        assert_eq!(data, unpacked[..data.len()]);
+        assert_eq!(data, unpacked);
     }
 
     #[test]
     fn test_empty_data() {
         let data: Vec<u64> = vec![];
-        let packed = bit_pack(&data, 8);
-        let unpacked: Vec<u64> = bit_unpack(&packed, 8);
+        let mut out = vec![0u64; 1];
+        bit_pack(&data, 8, &mut out);
+        let mut unpacked = vec![0u64; 0];
+        bit_unpack(&out, 8, &mut unpacked);
 
         assert_eq!(data, unpacked);
     }
@@ -397,10 +375,13 @@ mod tests {
         let data: Vec<u64> = vec![42];
         let bit_width = 8;
 
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![0u64; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
 
-        assert_eq!(data, unpacked[..1]);
+        assert_eq!(data, unpacked);
     }
 
     #[test]
@@ -409,36 +390,47 @@ mod tests {
         let data = vec![1u64; 100]; // 100 values
         let bit_width = 10; // Each value needs 10 bits
 
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
 
         // 100 values * 10 bits = 1000 bits
         // 1000 bits / 64 bits per u64 = 15.625, so we need 16 u64s
         let expected_u64s = (100 * 10usize).div_ceil(64);
-        assert_eq!(packed.len(), expected_u64s);
+        assert_eq!(out.len(), expected_u64s);
 
         // This should be much less than storing 100 full u64s
-        assert!(packed.len() < 100);
+        assert!(out.len() < 100);
     }
 
     #[test]
     fn test_different_types() {
         // Test u8
         let data_u8: Vec<u8> = vec![1, 2, 3, 4, 5];
-        let packed_u8 = bit_pack(&data_u8, 4);
-        let unpacked_u8: Vec<u8> = bit_unpack(&packed_u8, 4);
-        assert_eq!(data_u8, unpacked_u8[..data_u8.len()]);
+        let total_bits = data_u8.len() * 4;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u8, 4, &mut out);
+        let mut unpacked_u8 = vec![0u8; data_u8.len()];
+        bit_unpack(&out, 4, &mut unpacked_u8);
+        assert_eq!(data_u8, unpacked_u8);
 
         // Test u16
         let data_u16: Vec<u16> = vec![100, 200, 300, 400, 500];
-        let packed_u16 = bit_pack(&data_u16, 10);
-        let unpacked_u16: Vec<u16> = bit_unpack(&packed_u16, 10);
-        assert_eq!(data_u16, unpacked_u16[..data_u16.len()]);
+        let total_bits = data_u16.len() * 10;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u16, 10, &mut out);
+        let mut unpacked_u16 = vec![0u16; data_u16.len()];
+        bit_unpack(&out, 10, &mut unpacked_u16);
+        assert_eq!(data_u16, unpacked_u16);
 
         // Test u32
         let data_u32: Vec<u32> = vec![1000, 2000, 3000, 4000, 5000];
-        let packed_u32 = bit_pack(&data_u32, 16);
-        let unpacked_u32: Vec<u32> = bit_unpack(&packed_u32, 16);
-        assert_eq!(data_u32, unpacked_u32[..data_u32.len()]);
+        let total_bits = data_u32.len() * 16;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u32, 16, &mut out);
+        let mut unpacked_u32 = vec![0u32; data_u32.len()];
+        bit_unpack(&out, 16, &mut unpacked_u32);
+        assert_eq!(data_u32, unpacked_u32);
     }
 
     #[test]
@@ -447,10 +439,13 @@ mod tests {
         let data: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
         let bit_width = 4;
 
-        let packed = bit_pack(&data, bit_width);
-        let unpacked_original: Vec<u32> = bit_unpack(&packed, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked_original = vec![0u32; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_original);
 
-        assert_eq!(data, unpacked_original[..data.len()]);
+        assert_eq!(data, unpacked_original);
     }
 
     #[test]
@@ -468,12 +463,14 @@ mod tests {
         ];
 
         for (bit_width, data) in test_cases {
-            let packed = bit_pack(&data, bit_width);
-            let unpacked_original: Vec<u32> = bit_unpack(&packed, bit_width);
+            let total_bits = data.len() * bit_width;
+            let mut out = vec![0u64; total_bits.div_ceil(64)];
+            bit_pack(&data, bit_width, &mut out);
+            let mut unpacked_original = vec![0u32; data.len()];
+            bit_unpack(&out, bit_width, &mut unpacked_original);
 
             assert_eq!(
-                data,
-                unpacked_original[..data.len()],
+                data, unpacked_original,
                 "Original failed for bit_width {bit_width}"
             );
         }
@@ -485,10 +482,13 @@ mod tests {
         let data: Vec<u32> = (0..1000).map(|x| x % 16).collect(); // Values that fit in 4 bits
         let bit_width = 4;
 
-        let packed = bit_pack(&data, bit_width);
-        let unpacked_original: Vec<u32> = bit_unpack(&packed, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked_original = vec![0u32; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_original);
 
-        assert_eq!(data, unpacked_original[..1000]);
+        assert_eq!(data, unpacked_original);
     }
 
     #[test]
@@ -498,29 +498,41 @@ mod tests {
         // Test u8 with 8-byte chunks
         let data_u8: Vec<u8> = (0..64).map(|x| (x % 16) as u8).collect();
         let bit_width = 4;
-        let packed_u8 = bit_pack(&data_u8, bit_width);
-        let unpacked_u8: Vec<u8> = bit_unpack(&packed_u8, bit_width);
+        let total_bits = data_u8.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u8, bit_width, &mut out);
+        let mut unpacked_u8 = vec![0u8; data_u8.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_u8);
         assert_eq!(data_u8, unpacked_u8, "u8 optimized unpack failed");
 
         // Test u16 with 16-element chunks
         let data_u16: Vec<u16> = (0..64).map(|x| (x % 256) as u16).collect();
         let bit_width = 8;
-        let packed_u16 = bit_pack(&data_u16, bit_width);
-        let unpacked_u16: Vec<u16> = bit_unpack(&packed_u16, bit_width);
+        let total_bits = data_u16.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u16, bit_width, &mut out);
+        let mut unpacked_u16 = vec![0u16; data_u16.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_u16);
         assert_eq!(data_u16, unpacked_u16, "u16 optimized unpack failed");
 
         // Test u32 with 32-element chunks
         let data_u32: Vec<u32> = (0..64).map(|x| (x % 1024) as u32).collect();
         let bit_width = 10;
-        let packed_u32 = bit_pack(&data_u32, bit_width);
-        let unpacked_u32: Vec<u32> = bit_unpack(&packed_u32, bit_width);
+        let total_bits = data_u32.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u32, bit_width, &mut out);
+        let mut unpacked_u32 = vec![0u32; data_u32.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_u32);
         assert_eq!(data_u32, unpacked_u32, "u32 optimized unpack failed");
 
         // Test u64 with 64-element chunks
         let data_u64: Vec<u64> = (0..128).map(|x| (x % 4096) as u64).collect();
         let bit_width = 12;
-        let packed_u64 = bit_pack(&data_u64, bit_width);
-        let unpacked_u64: Vec<u64> = bit_unpack(&packed_u64, bit_width);
+        let total_bits = data_u64.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data_u64, bit_width, &mut out);
+        let mut unpacked_u64 = vec![0u64; data_u64.len()];
+        bit_unpack(&out, bit_width, &mut unpacked_u64);
         assert_eq!(data_u64, unpacked_u64, "u64 optimized unpack failed");
     }
 
@@ -531,15 +543,21 @@ mod tests {
         // Test with small counts that should fall back to original implementation
         let data: Vec<u32> = vec![1, 2, 3, 4, 5];
         let bit_width = 4;
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<u32> = bit_unpack(&packed, bit_width);
-        assert_eq!(data, unpacked[..5], "Fallback failed for small data");
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![0u32; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
+        assert_eq!(data, unpacked, "Fallback failed for small data");
 
         // Test with large bit widths that should fall back
         let data: Vec<u64> = vec![1, 2, 3, 4, 5, 6, 7, 8];
         let bit_width = 40;
-        let packed = bit_pack(&data, bit_width);
-        let unpacked: Vec<u64> = bit_unpack(&packed, bit_width);
-        assert_eq!(data, unpacked[..8], "Fallback failed for large bit width");
+        let total_bits = data.len() * bit_width;
+        let mut out = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut out);
+        let mut unpacked = vec![0u64; data.len()];
+        bit_unpack(&out, bit_width, &mut unpacked);
+        assert_eq!(data, unpacked, "Fallback failed for large bit width");
     }
 }

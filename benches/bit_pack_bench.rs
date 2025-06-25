@@ -27,7 +27,11 @@ fn bench_bit_pack_different_widths(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("bmi_select", bit_width),
             &data,
-            |b, data| b.iter(|| bit_pack(black_box(data), black_box(bit_width))),
+            |b, data| {
+                let total_bits = data.len() * bit_width;
+                let mut out = vec![0u64; total_bits.div_ceil(64)];
+                b.iter(|| bit_pack(black_box(data), black_box(bit_width), black_box(&mut out)));
+            },
         );
 
         // Benchmark fastlanes implementation
@@ -66,7 +70,9 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
         let data = generate_test_data(size, bit_width);
 
         // Prepare data for our implementation
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut packed = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed);
 
         // Prepare data for fastlanes
         let batches = size / 1024;
@@ -88,8 +94,9 @@ fn bench_bit_unpack_different_widths(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("bmi_select", bit_width),
             &(packed, size),
-            |b, (packed, _original_count)| {
-                b.iter(|| bit_unpack::<u64>(black_box(packed), black_box(bit_width)))
+            |b, (packed, original_count)| {
+                let mut out = vec![0u64; *original_count];
+                b.iter(|| bit_unpack(black_box(packed), black_box(bit_width), black_box(&mut out)))
             },
         );
 
@@ -139,8 +146,13 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
             .collect();
 
         // Prepare data for our implementation
-        let packed_data = bit_pack(&data, bit_width);
-        let bit_mask = bit_pack(&mask_data, 1);
+        let data_bits = data.len() * bit_width;
+        let mut packed_data = vec![0u64; data_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed_data);
+        
+        let mask_bits = mask_data.len() * 1;
+        let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+        bit_pack(&mask_data, 1, &mut bit_mask);
 
         // Prepare data for fastlanes
         let batches = size / 1024;
@@ -170,7 +182,10 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
             BenchmarkId::new("bmi_select", format!("{ratio_percent}%")),
             &(packed_data.clone(), bit_mask),
             |b, (packed, mask)| {
-                b.iter(|| select_packed(black_box(packed), black_box(bit_width), black_box(mask)))
+                let selected_count = mask_data.iter().sum::<u64>() as usize;
+                let selected_bits = selected_count * bit_width;
+                let mut out = vec![0u64; selected_bits.div_ceil(64)];
+                b.iter(|| select_packed(black_box(packed), black_box(bit_width), black_box(mask), black_box(&mut out)))
             },
         );
 

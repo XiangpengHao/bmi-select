@@ -1,21 +1,23 @@
 ## BMI Select 
 
-This library provides 3 efficient functions for packing, unpacking, and selecting bits from bit-packed data.
+This library provides 3 efficient functions for packing, unpacking, and selecting bits from bit-packed data using a buffer-based interface for optimal memory management.
 
 ### Bit packing
 ```rust
 use bmi_select::bit_pack;
 let data = vec![1, 2, 3, 4, 5, 6, 7, 8];
-let packed = bit_pack(&data, 4);
-assert_eq!(packed, vec![0x87654321]);
+let mut out = vec![0u64; 1];
+bit_pack(&data, 4, &mut out);
+assert_eq!(out, vec![0x87654321]);
 ```
 
 ### Bit unpacking
 ```rust
 use bmi_select::bit_unpack;
 let packed = vec![0x87654321];
-let unpacked = bit_unpack(&packed, 4);
-assert_eq!(unpacked[..8], vec![1, 2, 3, 4, 5, 6, 7, 8]);
+let mut out = vec![0u32; 8];
+bit_unpack(&packed, 4, &mut out);
+assert_eq!(out, vec![1, 2, 3, 4, 5, 6, 7, 8]);
 ```
 
 ### Bit selection
@@ -23,8 +25,9 @@ assert_eq!(unpacked[..8], vec![1, 2, 3, 4, 5, 6, 7, 8]);
 use bmi_select::select_packed;
 let packed   = vec![0x87654321];
 let bit_mask = vec![0b10101010];
-let selected = select_packed(&packed, 4, &bit_mask);
-assert_eq!(selected[..4], vec![0x8642]);
+let mut out = vec![0u64; 1];
+select_packed(&packed, 4, &bit_mask, &mut out);
+assert_eq!(out, vec![0x8642]);
 ```
 
 ## Features

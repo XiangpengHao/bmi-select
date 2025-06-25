@@ -1,8 +1,4 @@
-pub fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
-    if packed.is_empty() || bit_width == 0 || bit_width > 64 || bit_mask.is_empty() {
-        return Vec::new();
-    }
-
+pub fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &mut [u64]) {
     let max_elements = (packed.len() * 64) / bit_width;
 
     let extract_mask = if bit_width == 64 {
@@ -11,7 +7,6 @@ pub fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64]
         (1u64 << bit_width) - 1
     };
 
-    let mut out: Vec<u64> = Vec::new();
     let mut out_bit_offset = 0usize;
 
     for idx in 0..max_elements {
@@ -51,26 +46,17 @@ pub fn select_packed_fallback(packed: &[u64], bit_width: usize, bit_mask: &[u64]
         let out_u64_idx = out_bit_offset / 64;
         let out_bit_pos = out_bit_offset % 64;
 
-        if out_u64_idx >= out.len() {
-            out.push(0u64);
-        }
-
         if out_bit_pos + bit_width <= 64 {
             out[out_u64_idx] |= value << out_bit_pos;
         } else {
             let bits_in_first = 64 - out_bit_pos;
 
             out[out_u64_idx] |= value << out_bit_pos;
-            if out_u64_idx + 1 >= out.len() {
-                out.push(0u64);
-            }
             out[out_u64_idx + 1] |= value >> bits_in_first;
         }
 
         out_bit_offset += bit_width;
     }
-
-    out
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -81,6 +67,7 @@ use std::arch::is_x86_feature_detected;
 ///
 /// If the current CPU does not support BMI2, this falls back to the portable
 /// `select_packed_fallback` implementation.
+/// The output buffer must have enough space to hold the selected data.
 ///
 /// Example:
 /// ```
@@ -88,36 +75,34 @@ use std::arch::is_x86_feature_detected;
 /// let packed   = vec![0x87654321];
 /// let bit_mask = vec![0b10101010];
 /// let bit_width = 4;
-/// let selected = select_packed(&packed, bit_width, &bit_mask);
+/// let mut selected = vec![0u64; 1];
+/// select_packed(&packed, bit_width, &bit_mask, &mut selected);
 /// assert_eq!(selected, vec![0x8642]);
 ///
-/// let unpacked: Vec<u64> = bit_unpack(&selected, bit_width);
-/// assert_eq!(unpacked[..4], vec![2, 4, 6, 8]);
+/// let mut unpacked = vec![0u64; 4];
+/// bit_unpack(&selected, bit_width, &mut unpacked);
+/// assert_eq!(unpacked, vec![2, 4, 6, 8]);
 /// ```
-pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
+pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &mut [u64]) {
     // if BMI2 is unavailable, defer to the generic version.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if !is_x86_feature_detected!("bmi2") {
-            return select_packed_fallback(packed, bit_width, bit_mask);
+            return select_packed_fallback(packed, bit_width, bit_mask, out);
         }
     }
 
-    unsafe { select_packed_bmi_impl(packed, bit_width, bit_mask) }
+    unsafe { select_packed_bmi_impl(packed, bit_width, bit_mask, out) }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "bmi2")]
-unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u64]) -> Vec<u64> {
+unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &mut [u64]) {
     use std::arch::x86_64::{_pdep_u64, _pext_u64};
-
-    if packed.is_empty() || bit_width == 0 || bit_width > 64 || bit_mask.is_empty() {
-        return Vec::new();
-    }
 
     // Special-case 64-bit
     if bit_width == 64 {
-        let mut out: Vec<u64> = Vec::new();
+        let mut out_idx = 0;
         for (idx, &word) in packed.iter().enumerate() {
             let mask_u64_idx = idx / 64;
             if mask_u64_idx >= bit_mask.len() {
@@ -125,16 +110,14 @@ unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u
             }
             let mask_bit_pos = idx % 64;
             if (bit_mask[mask_u64_idx] >> mask_bit_pos) & 1 != 0 {
-                out.push(word);
+                out[out_idx] = word;
+                out_idx += 1;
             }
         }
-        return out;
+        return;
     }
 
     let masks = get_precomputed_masks(bit_width);
-
-    let selected_count: usize = bit_mask.iter().map(|m| m.count_ones() as usize).sum();
-    let mut out = vec![0u64; (selected_count * bit_width).div_ceil(64)];
     let mut out_bit_offset: usize = 0;
 
     for (word_idx, &values_word) in packed.iter().enumerate() {
@@ -185,8 +168,6 @@ unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u
 
         out_bit_offset += bits_extracted;
     }
-
-    out
 }
 
 /// For a given bit width k, we need k distinct masks that are reused in a
@@ -489,16 +470,22 @@ mod tests {
         // Test basic selection functionality
         let data: Vec<u64> = vec![10, 20, 30, 40, 50];
         let bit_width = 8;
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut packed = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed);
 
         // Create a mask that selects elements at positions 0, 2, and 4 (10, 30, 50)
         let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1]; // Select 1st, 3rd, and 5th elements
-        let bit_mask = bit_pack(&mask_data, 1);
+        let mask_bits = mask_data.len() * 1;
+        let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+        bit_pack(&mask_data, 1, &mut bit_mask);
 
-        let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
+        let mut selected_packed = vec![0u64; 3]; // Expecting 3 selected elements
+        select_packed_fallback(&packed, bit_width, &bit_mask, &mut selected_packed);
+        let mut selected_unpacked = vec![0u64; 3];
+        bit_unpack(&selected_packed, bit_width, &mut selected_unpacked);
 
-        assert_eq!(selected_unpacked[..3], vec![10, 30, 50]);
+        assert_eq!(selected_unpacked, vec![10, 30, 50]);
     }
 
     #[test]
@@ -506,15 +493,21 @@ mod tests {
         // Test selecting all elements
         let data: Vec<u64> = vec![1, 2, 3, 4];
         let bit_width = 4;
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut packed = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed);
 
         let mask_data: Vec<u64> = vec![1, 1, 1, 1]; // Select all elements
-        let bit_mask = bit_pack(&mask_data, 1);
+        let mask_bits = mask_data.len() * 1;
+        let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+        bit_pack(&mask_data, 1, &mut bit_mask);
 
-        let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
+        let mut selected_packed = vec![0u64; 2]; // 4 elements * 4 bits = 16 bits = 1 u64
+        select_packed_fallback(&packed, bit_width, &bit_mask, &mut selected_packed);
+        let mut selected_unpacked = vec![0u64; 4];
+        bit_unpack(&selected_packed, bit_width, &mut selected_unpacked);
 
-        assert_eq!(selected_unpacked[..4], data);
+        assert_eq!(selected_unpacked, data);
     }
 
     #[test]
@@ -522,14 +515,19 @@ mod tests {
         // Test selecting no elements
         let data: Vec<u64> = vec![1, 2, 3, 4];
         let bit_width = 4;
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut packed = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed);
 
         let mask_data: Vec<u64> = vec![0, 0, 0, 0]; // Select no elements
-        let bit_mask = bit_pack(&mask_data, 1);
+        let mask_bits = mask_data.len() * 1;
+        let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+        bit_pack(&mask_data, 1, &mut bit_mask);
 
-        let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
+        let mut selected_packed = vec![0u64; 1];
+        select_packed_fallback(&packed, bit_width, &bit_mask, &mut selected_packed);
 
-        assert_eq!(selected_packed, Vec::<u64>::new());
+        assert_eq!(selected_packed, vec![0u64]);
     }
 
     #[test]
@@ -537,16 +535,22 @@ mod tests {
         // Test with a non-power-of-2 bit width
         let data: Vec<u64> = vec![100, 200, 300, 400, 500, 600];
         let bit_width = 11; // 11 bits can represent values up to 2047
-        let packed = bit_pack(&data, bit_width);
+        let total_bits = data.len() * bit_width;
+        let mut packed = vec![0u64; total_bits.div_ceil(64)];
+        bit_pack(&data, bit_width, &mut packed);
 
         // Select every other element
         let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1, 0];
-        let bit_mask = bit_pack(&mask_data, 1);
+        let mask_bits = mask_data.len() * 1;
+        let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+        bit_pack(&mask_data, 1, &mut bit_mask);
 
-        let selected_packed = select_packed_fallback(&packed, bit_width, &bit_mask);
-        let selected_unpacked: Vec<u64> = bit_unpack(&selected_packed, bit_width);
+        let mut selected_packed = vec![0u64; 2]; // 3 elements * 11 bits = 33 bits = 1 u64
+        select_packed_fallback(&packed, bit_width, &bit_mask, &mut selected_packed);
+        let mut selected_unpacked = vec![0u64; 3];
+        bit_unpack(&selected_packed, bit_width, &mut selected_unpacked);
 
-        assert_eq!(selected_unpacked[..3], vec![100, 300, 500]);
+        assert_eq!(selected_unpacked, vec![100, 300, 500]);
     }
 
     #[test]
@@ -563,14 +567,24 @@ mod tests {
         let bit_widths = [1usize, 4, 7, 8, 12, 16, 24, 32, 33, 48, 64];
 
         for &bw in &bit_widths {
-            let packed = bit_pack(&data, bw);
+            let total_bits = data.len() * bw;
+            let mut packed = vec![0u64; total_bits.div_ceil(64)];
+            bit_pack(&data, bw, &mut packed);
             let mask_data: Vec<u64> = (0..data.len())
                 .map(|i| if i % 3 == 0 { 1 } else { 0 })
                 .collect();
-            let bit_mask = bit_pack(&mask_data, 1);
+            let mask_bits = mask_data.len() * 1;
+            let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
+            bit_pack(&mask_data, 1, &mut bit_mask);
 
-            let generic = select_packed_fallback(&packed, bw, &bit_mask);
-            let bmi = select_packed(&packed, bw, &bit_mask);
+            let selected_count = mask_data.iter().sum::<u64>() as usize;
+            let selected_bits = selected_count * bw;
+            let selected_u64s = selected_bits.div_ceil(64);
+
+            let mut generic = vec![0u64; selected_u64s];
+            select_packed_fallback(&packed, bw, &bit_mask, &mut generic);
+            let mut bmi = vec![0u64; selected_u64s];
+            select_packed(&packed, bw, &bit_mask, &mut bmi);
             assert_eq!(generic, bmi);
         }
     }
