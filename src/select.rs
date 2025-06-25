@@ -481,7 +481,7 @@ mod tests {
 
         // Create a mask that selects elements at positions 0, 2, and 4 (10, 30, 50)
         let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1]; // Select 1st, 3rd, and 5th elements
-        let mask_bits = mask_data.len() * 1;
+        let mask_bits = mask_data.len();
         let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
         bit_pack(&mask_data, 1, &mut bit_mask);
 
@@ -503,7 +503,7 @@ mod tests {
         bit_pack(&data, bit_width, &mut packed);
 
         let mask_data: Vec<u64> = vec![1, 1, 1, 1]; // Select all elements
-        let mask_bits = mask_data.len() * 1;
+        let mask_bits = mask_data.len();
         let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
         bit_pack(&mask_data, 1, &mut bit_mask);
 
@@ -525,7 +525,7 @@ mod tests {
         bit_pack(&data, bit_width, &mut packed);
 
         let mask_data: Vec<u64> = vec![0, 0, 0, 0]; // Select no elements
-        let mask_bits = mask_data.len() * 1;
+        let mask_bits = mask_data.len();
         let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
         bit_pack(&mask_data, 1, &mut bit_mask);
 
@@ -546,7 +546,7 @@ mod tests {
 
         // Select every other element
         let mask_data: Vec<u64> = vec![1, 0, 1, 0, 1, 0];
-        let mask_bits = mask_data.len() * 1;
+        let mask_bits = mask_data.len();
         let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
         bit_pack(&mask_data, 1, &mut bit_mask);
 
@@ -578,7 +578,7 @@ mod tests {
             let mask_data: Vec<u64> = (0..data.len())
                 .map(|i| if i % 3 == 0 { 1 } else { 0 })
                 .collect();
-            let mask_bits = mask_data.len() * 1;
+            let mask_bits = mask_data.len();
             let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
             bit_pack(&mask_data, 1, &mut bit_mask);
 
