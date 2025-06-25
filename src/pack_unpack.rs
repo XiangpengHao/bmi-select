@@ -225,7 +225,7 @@ fn bit_unpack_impl_into<T: BitPackable>(packed_data: &[u64], bit_width: usize, o
 
     let mut bit_position = 0usize;
 
-    for i in 0..out.len() {
+    for o in out {
         let word_index = bit_position / 64;
         let bit_offset = bit_position % 64;
 
@@ -245,7 +245,7 @@ fn bit_unpack_impl_into<T: BitPackable>(packed_data: &[u64], bit_width: usize, o
             (low_part | high_part) & mask
         };
 
-        out[i] = T::from_u64(value);
+        *o = T::from_u64(value);
         bit_position += bit_width;
     }
 }

@@ -97,7 +97,12 @@ pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &m
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "bmi2")]
-unsafe fn select_packed_bmi_impl(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &mut [u64]) {
+unsafe fn select_packed_bmi_impl(
+    packed: &[u64],
+    bit_width: usize,
+    bit_mask: &[u64],
+    out: &mut [u64],
+) {
     use std::arch::x86_64::{_pdep_u64, _pext_u64};
 
     // Special-case 64-bit

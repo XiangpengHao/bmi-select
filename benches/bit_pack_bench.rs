@@ -149,7 +149,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
         let data_bits = data.len() * bit_width;
         let mut packed_data = vec![0u64; data_bits.div_ceil(64)];
         bit_pack(&data, bit_width, &mut packed_data);
-        
+
         let mask_bits = mask_data.len() * 1;
         let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
         bit_pack(&mask_data, 1, &mut bit_mask);
@@ -185,7 +185,14 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
                 let selected_count = mask_data.iter().sum::<u64>() as usize;
                 let selected_bits = selected_count * bit_width;
                 let mut out = vec![0u64; selected_bits.div_ceil(64)];
-                b.iter(|| select_packed(black_box(packed), black_box(bit_width), black_box(mask), black_box(&mut out)))
+                b.iter(|| {
+                    select_packed(
+                        black_box(packed),
+                        black_box(bit_width),
+                        black_box(mask),
+                        black_box(&mut out),
+                    )
+                })
             },
         );
 
