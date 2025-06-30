@@ -480,6 +480,7 @@ fn get_precomputed_masks(bit_width: usize) -> &'static [u64] {
 ///
 /// # Example
 /// ```rust
+/// use bmi_select::select_unpacked;
 /// let src = vec![10, 20, 30, 40, 50];
 /// let bitmap = vec![0b10101u64]; // Select elements 0, 2, 4
 /// let mut dst = vec![0u64; 3];
@@ -501,27 +502,32 @@ pub fn select_unpacked(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -
 
 /// Scalar fallback implementation for CPUs without AVX-512.
 fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -> usize {
-    let mut cur_bitmap = bitmap[0];
-    let mut bitmap_ptr = 0;
-    let mut bitmap_remaining = 64;
     let mut selected_idx = 0;
+    let mut src_idx = 0;
+    let num_full_chunks = n / 64;
 
-    for i in 0..n {
-        dst[selected_idx] = src[i];
-        // Advance destination pointer only if element is selected (branchless)
-        selected_idx += (cur_bitmap & 1) as usize;
-        cur_bitmap >>= 1;
-        bitmap_remaining -= 1;
-
-        // Move to next bitmap word when current is exhausted
-        if bitmap_remaining == 0 {
-            bitmap_remaining = 64;
-            bitmap_ptr += 1;
-            if bitmap_ptr < bitmap.len() {
-                cur_bitmap = bitmap[bitmap_ptr];
-            }
+    for i in 0..num_full_chunks {
+        let mut current_bitmap = bitmap[i];
+        // This loop of 64 is branch-free for selection.
+        for _ in 0..64 {
+            dst[selected_idx] = src[src_idx];
+            selected_idx += (current_bitmap & 1) as usize;
+            current_bitmap >>= 1;
+            src_idx += 1;
         }
     }
+
+    let remainder = n % 64;
+    if remainder > 0 {
+        let mut current_bitmap = bitmap[num_full_chunks];
+        for _ in 0..remainder {
+            dst[selected_idx] = src[src_idx];
+            selected_idx += (current_bitmap & 1) as usize;
+            current_bitmap >>= 1;
+            src_idx += 1;
+        }
+    }
+
     selected_idx
 }
 
@@ -586,29 +592,15 @@ unsafe fn select_unpacked_avx512_compress(
             bitmap_ptr = bitmap_ptr.add(2); // Advance by 2 u64s (128 bits)
         }
 
-        // Handle the remaining elements (< 128) using a simple scalar loop.
+        // Handle the remaining elements (< 128) using the optimized fallback.
         if n > batch_n {
-            let mut bitmap_idx = batch_n / 64; // Index of the u64 in the bitmap slice.
-            let mut bit_in_u64 = batch_n % 64; // Bit position within that u64.
-            let mut current_bitmap_val = *bitmap.get_unchecked(bitmap_idx);
-
-            for _ in batch_n..n {
-                // If we've used all bits in the current bitmap u64, load the next one.
-                if bit_in_u64 == 64 {
-                    bit_in_u64 = 0;
-                    bitmap_idx += 1;
-                    current_bitmap_val = *bitmap.get_unchecked(bitmap_idx);
-                }
-
-                // If the corresponding bit is 1, copy the element.
-                if (current_bitmap_val >> bit_in_u64) & 1 == 1 {
-                    *dst_ptr = *src_ptr;
-                    dst_ptr = dst_ptr.add(1);
-                }
-
-                src_ptr = src_ptr.add(1);
-                bit_in_u64 += 1;
-            }
+            let elements_written_avx = dst_ptr.offset_from(dst.as_ptr()) as usize;
+            let rem_n = n - batch_n;
+            let rem_src = &src[batch_n..n];
+            let rem_bitmap = &bitmap[batch_n / 64..];
+            let rem_dst = &mut dst[elements_written_avx..];
+            let count_rem = select_unpacked_fallback(rem_src, rem_bitmap, rem_dst, rem_n);
+            dst_ptr = dst_ptr.add(count_rem);
         }
 
         dst_ptr.offset_from(dst.as_ptr()) as usize
@@ -792,7 +784,7 @@ mod tests {
     #[test]
     fn test_select_unpacked_large_batch() {
         // Test with a large dataset that requires batch processing (>= 128 elements)
-        let src: Vec<u64> = (1..=2048).collect();
+        let src: Vec<u64> = (0..2048).collect();
         let bitmap_data: Vec<u64> = (0..2048).map(|i| if i % 3 > 0 { 1 } else { 0 }).collect(); // Select every 3rd element
         let selected_count = bitmap_data.iter().filter(|&&x| x != 0).count();
 
@@ -806,7 +798,7 @@ mod tests {
         assert_eq!(count, selected_count);
 
         // Verify the selected elements are correct
-        let expected: Vec<u64> = (1..=2048).filter(|&i| (i - 1) % 3 != 0).collect();
+        let expected: Vec<u64> = (0..2048).filter(|&i| i % 3 > 0).collect();
         assert_eq!(&dst[..count], &expected);
     }
 
