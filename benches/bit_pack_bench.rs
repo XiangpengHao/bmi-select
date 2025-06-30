@@ -262,7 +262,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
             },
         );
 
-        // Benchmark fastlanes no-branch implementation
+        // Benchmark fastlanes implementation with avx512 select
         group.bench_function(
             BenchmarkId::new("fastlanes-avx512-select", format!("{ratio_percent}%")),
             |b| {
@@ -283,7 +283,7 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
                         }
                     }
 
-                    // Select values based on mask_bm
+                    // Select values based on bit_mask
                     let selected_idx = select_unpacked(&unpacked, &bit_mask, &mut selected, size);
 
                     // Repack selected values

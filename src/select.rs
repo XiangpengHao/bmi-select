@@ -464,33 +464,31 @@ fn get_precomputed_masks(bit_width: usize) -> &'static [u64] {
     }
 }
 
-use std::arch::x86_64::*;
-use std::slice;
-
-/// The number of u64 elements processed in a single SIMD batch.
-pub const SIMD_COMPRESS_BATCH_SIZE: usize = 128;
-
-/// The number of u64 elements processed in one SIMD register (512 bits / 64 bits per element).
-const ONE_ROUND_SIZE: usize = 8;
-
-/// The number of rounds (of 8 elements each) required to process one full batch.
-const NUM_ROUNDS_IN_A_BATCH: usize = 16;
-
 /// Selects elements from a source slice of `u64`s based on a `u64` bitmap and writes them to a destination slice.
 ///
-/// This is the public, safe wrapper function.
+/// Uses AVX-512 compress instructions when available, falls back to scalar implementation otherwise.
+/// Processes data in batches of 128 elements for optimal SIMD utilization.
 ///
-/// - `src`: The source data slice.
-/// - `bitmap`: A slice of `u64`s, where each bit corresponds to an element in `src`.
-///   A '1' bit means the element is kept, and a '0' bit means it's discarded.
-/// - `dst`: The destination slice to write the selected ("compressed") elements into.
-/// - `n`: The number of elements to process from the `src` slice.
+/// # Parameters
+/// - `src`: Source data elements
+/// - `bitmap`: Selection bitmap (1 bit per element)
+/// - `dst`: Destination for selected elements
+/// - `n`: Number of elements to process
 ///
-/// # Panics
-/// - Panics if the destination slice `dst` is not large enough to hold all the selected elements.
-/// - Panics if the bitmap is not large enough for `n` elements (i.e., `bitmap.len() * 64 < n`).
+/// # Returns
+/// Number of elements written to destination
+///
+/// # Example
+/// ```rust
+/// let src = vec![10, 20, 30, 40, 50];
+/// let bitmap = vec![0b10101u64]; // Select elements 0, 2, 4
+/// let mut dst = vec![0u64; 3];
+/// let count = select_unpacked(&src, &bitmap, &mut dst, 5);
+/// assert_eq!(count, 3);
+/// assert_eq!(&dst[..count], &[10, 30, 50]);
+/// ```
 pub fn select_unpacked(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -> usize {
-    // AVX512F is sufficient for the compression part. Popcount is done with a standard instruction.
+    // Use AVX-512 compress instruction if available
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         if !is_x86_feature_detected!("avx512f") {
@@ -498,10 +496,10 @@ pub fn select_unpacked(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -
         }
     }
 
-    // Safety: The CPU feature check has passed. We can now call the unsafe, accelerated implementation.
     unsafe { select_unpacked_avx512_compress(src, bitmap, dst, n) }
 }
 
+/// Scalar fallback implementation for CPUs without AVX-512.
 fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -> usize {
     let mut cur_bitmap = bitmap[0];
     let mut bitmap_ptr = 0;
@@ -510,9 +508,12 @@ fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usi
 
     for i in 0..n {
         dst[selected_idx] = src[i];
+        // Advance destination pointer only if element is selected (branchless)
         selected_idx += (cur_bitmap & 1) as usize;
         cur_bitmap >>= 1;
         bitmap_remaining -= 1;
+
+        // Move to next bitmap word when current is exhausted
         if bitmap_remaining == 0 {
             bitmap_remaining = 64;
             bitmap_ptr += 1;
@@ -524,11 +525,13 @@ fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usi
     selected_idx
 }
 
-/// The unsafe, SIMD-accelerated implementation of the selection logic.
+/// AVX-512 accelerated implementation using hardware compress instructions.
+///
+/// Processes data in batches of 128 elements (16 rounds of 8 elements each).
+/// Each batch uses 128 bits of bitmap data, viewed as 16 separate 8-bit masks.
 ///
 /// # Safety
-/// The caller MUST ensure that the `avx512f` CPU feature is supported before calling this function.
-/// All input slices and pointers must be valid for the specified lengths and memory accesses.
+/// Requires AVX-512F support and valid input slices with sufficient capacity.
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx512f")]
 unsafe fn select_unpacked_avx512_compress(
@@ -537,8 +540,19 @@ unsafe fn select_unpacked_avx512_compress(
     dst: &mut [u64],
     n: usize,
 ) -> usize {
+    use std::arch::x86_64::*;
+    use std::slice;
+
+    /// The number of u64 elements processed in a single SIMD batch.
+    const SIMD_COMPRESS_BATCH_SIZE: usize = 128;
+
+    /// The number of u64 elements in one AVX-512 register (512 bits / 64 bits = 8).
+    const ONE_ROUND_SIZE: usize = 8;
+
+    /// The number of rounds per batch (128 elements / 8 per round = 16).
+    const NUM_ROUNDS_IN_A_BATCH: usize = SIMD_COMPRESS_BATCH_SIZE / ONE_ROUND_SIZE;
+
     unsafe {
-        // Ensure the fundamental constants of the algorithm are consistent.
         assert_eq!(
             ONE_ROUND_SIZE * NUM_ROUNDS_IN_A_BATCH,
             SIMD_COMPRESS_BATCH_SIZE
@@ -546,36 +560,30 @@ unsafe fn select_unpacked_avx512_compress(
 
         let batch_n = (n / SIMD_COMPRESS_BATCH_SIZE) * SIMD_COMPRESS_BATCH_SIZE;
 
-        // Initialize pointers to the start of the data buffers.
         let mut src_ptr = src.as_ptr();
         let mut dst_ptr = dst.as_mut_ptr();
-        // A batch of 128 elements requires 128 bits, which is two u64s from the bitmap.
         let mut bitmap_ptr = bitmap.as_ptr();
 
-        // Process full batches of 128 elements.
+        // Process complete batches of 128 elements
         for _ in (0..batch_n).step_by(SIMD_COMPRESS_BATCH_SIZE) {
-            // Get a view of the two u64s (128 bits) for this batch as 16 separate u8 masks.
+            // View 128-bit bitmap segment as 16 separate 8-bit masks
             let masks = slice::from_raw_parts(bitmap_ptr as *const u8, NUM_ROUNDS_IN_A_BATCH);
 
-            // Process the batch in 16 rounds, one for each 8-bit mask.
+            // Process 16 rounds of 8 elements each
             for j in 0..NUM_ROUNDS_IN_A_BATCH {
                 let mask = masks[j];
 
-                // Use the 8-bit mask to compress 8 elements from src into dst.
+                // Load 8 elements and compress using mask
                 let src_v = _mm512_loadu_epi64(src_ptr as *const i64);
                 let dst_v = _mm512_maskz_compress_epi64(mask, src_v);
                 _mm512_storeu_epi64(dst_ptr as *mut i64, dst_v);
 
-                // Calculate how many elements were written to advance the destination pointer.
                 let popcnt = mask.count_ones() as usize;
-
-                // Advance pointers for the next round.
                 src_ptr = src_ptr.add(ONE_ROUND_SIZE);
                 dst_ptr = dst_ptr.add(popcnt);
             }
 
-            // Advance the bitmap pointer by two u64s to prepare for the next batch.
-            bitmap_ptr = bitmap_ptr.add(2);
+            bitmap_ptr = bitmap_ptr.add(2); // Advance by 2 u64s (128 bits)
         }
 
         // Handle the remaining elements (< 128) using a simple scalar loop.
@@ -602,6 +610,7 @@ unsafe fn select_unpacked_avx512_compress(
                 bit_in_u64 += 1;
             }
         }
+
         dst_ptr.offset_from(dst.as_ptr()) as usize
     }
 }
