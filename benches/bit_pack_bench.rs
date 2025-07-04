@@ -1,4 +1,4 @@
-use bmi_select::{BitPackable, bit_pack, bit_unpack, select_packed};
+use bmi_select::{BitPackable, bit_pack, bit_unpack, select_packed, select_unpacked};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use fastlanes::BitPacking as FLBitPacking;
 
@@ -180,18 +180,24 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
         // Benchmark our implementation
         group.bench_with_input(
             BenchmarkId::new("bmi_select", format!("{ratio_percent}%")),
-            &(packed_data.clone(), bit_mask),
+            &(packed_data.clone(), bit_mask.clone()),
             |b, (packed, mask)| {
                 let selected_count = mask_data.iter().sum::<u64>() as usize;
                 let selected_bits = selected_count * bit_width;
-                let mut out = vec![0u64; selected_bits.div_ceil(64)];
+                let mut packed_selected = vec![0u64; selected_bits.div_ceil(64)];
+                // let mut unpacked_selected = vec![0u64; selected_count];
                 b.iter(|| {
                     select_packed(
                         black_box(packed),
                         black_box(bit_width),
                         black_box(mask),
-                        black_box(&mut out),
-                    )
+                        black_box(&mut packed_selected),
+                    );
+                    // bit_unpack(
+                    //     black_box(&packed_selected),
+                    //     black_box(bit_width),
+                    //     black_box(&mut unpacked_selected),
+                    // )
                 })
             },
         );
@@ -233,6 +239,55 @@ fn bench_select_packed_selection_ratios(c: &mut Criterion) {
 
                     // Repack selected values
                     let num_selected = selected.len();
+                    let out_batches = num_selected.div_ceil(1024);
+                    repacked.clear();
+                    repacked.resize(out_batches * out_batch, 0u64);
+
+                    for j in 0..out_batches {
+                        let start = j * 1024;
+                        let end = usize::min(start + 1024, num_selected);
+                        tmp_input[..end - start].copy_from_slice(&selected[start..end]);
+                        for v in &mut tmp_input[end - start..] {
+                            *v = 0;
+                        }
+                        unsafe {
+                            FLBitPacking::unchecked_pack(
+                                bit_width,
+                                &tmp_input,
+                                &mut repacked[j * out_batch..(j + 1) * out_batch],
+                            );
+                        }
+                    }
+                })
+            },
+        );
+
+        // Benchmark fastlanes implementation with avx512 select
+        group.bench_function(
+            BenchmarkId::new("fastlanes-avx512-select", format!("{ratio_percent}%")),
+            |b| {
+                let mut unpacked = vec![0u64; size];
+                let mut selected = vec![0u64; size];
+                let mut tmp_input = vec![0u64; 1024];
+                let mut repacked = Vec::<u64>::new();
+
+                b.iter(|| {
+                    // Unpack data
+                    for i in 0..batches {
+                        unsafe {
+                            FLBitPacking::unchecked_unpack(
+                                bit_width,
+                                &fl_packed_data[i * out_batch..(i + 1) * out_batch],
+                                &mut unpacked[i * 1024..(i + 1) * 1024],
+                            );
+                        }
+                    }
+
+                    // Select values based on bit_mask
+                    let selected_idx = select_unpacked(&unpacked, &bit_mask, &mut selected, size);
+
+                    // Repack selected values
+                    let num_selected = selected_idx;
                     let out_batches = num_selected.div_ceil(1024);
                     repacked.clear();
                     repacked.resize(out_batches * out_batch, 0u64);

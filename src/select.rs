@@ -464,6 +464,147 @@ fn get_precomputed_masks(bit_width: usize) -> &'static [u64] {
     }
 }
 
+/// Selects elements from a source slice of `u64`s based on a `u64` bitmap and writes them to a destination slice.
+///
+/// Uses AVX-512 compress instructions when available, falls back to scalar implementation otherwise.
+/// Processes data in batches of 128 elements for optimal SIMD utilization.
+///
+/// # Parameters
+/// - `src`: Source data elements
+/// - `bitmap`: Selection bitmap (1 bit per element)
+/// - `dst`: Destination for selected elements
+/// - `n`: Number of elements to process
+///
+/// # Returns
+/// Number of elements written to destination
+///
+/// # Example
+/// ```rust
+/// use bmi_select::select_unpacked;
+/// let src = vec![10, 20, 30, 40, 50];
+/// let bitmap = vec![0b10101u64]; // Select elements 0, 2, 4
+/// let mut dst = vec![0u64; 3];
+/// let count = select_unpacked(&src, &bitmap, &mut dst, 5);
+/// assert_eq!(count, 3);
+/// assert_eq!(&dst[..count], &[10, 30, 50]);
+/// ```
+pub fn select_unpacked(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -> usize {
+    // Use AVX-512 compress instruction if available
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if !is_x86_feature_detected!("avx512f") {
+            return select_unpacked_fallback(src, bitmap, dst, n);
+        }
+    }
+
+    unsafe { select_unpacked_avx512_compress(src, bitmap, dst, n) }
+}
+
+/// Scalar fallback implementation for CPUs without AVX-512.
+fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -> usize {
+    let mut selected_idx = 0;
+    let mut src_idx = 0;
+    let num_full_chunks = n / 64;
+
+    for (_i, &current_bitmap) in bitmap.iter().enumerate().take(num_full_chunks) {
+        let mut current_bitmap = current_bitmap;
+        // This loop of 64 is branch-free for selection.
+        for _ in 0..64 {
+            dst[selected_idx] = src[src_idx];
+            selected_idx += (current_bitmap & 1) as usize;
+            current_bitmap >>= 1;
+            src_idx += 1;
+        }
+    }
+
+    let remainder = n % 64;
+    if remainder > 0 {
+        let mut current_bitmap = bitmap[num_full_chunks];
+        for _ in 0..remainder {
+            dst[selected_idx] = src[src_idx];
+            selected_idx += (current_bitmap & 1) as usize;
+            current_bitmap >>= 1;
+            src_idx += 1;
+        }
+    }
+
+    selected_idx
+}
+
+/// AVX-512 accelerated implementation using hardware compress instructions.
+///
+/// Processes data in batches of 128 elements (16 rounds of 8 elements each).
+/// Each batch uses 128 bits of bitmap data, viewed as 16 separate 8-bit masks.
+///
+/// # Safety
+/// Requires AVX-512F support and valid input slices with sufficient capacity.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx512f")]
+unsafe fn select_unpacked_avx512_compress(
+    src: &[u64],
+    bitmap: &[u64],
+    dst: &mut [u64],
+    n: usize,
+) -> usize {
+    use std::arch::x86_64::*;
+    use std::slice;
+
+    /// The number of u64 elements processed in a single SIMD batch.
+    const SIMD_COMPRESS_BATCH_SIZE: usize = 128;
+
+    /// The number of u64 elements in one AVX-512 register (512 bits / 64 bits = 8).
+    const ONE_ROUND_SIZE: usize = 8;
+
+    /// The number of rounds per batch (128 elements / 8 per round = 16).
+    const NUM_ROUNDS_IN_A_BATCH: usize = SIMD_COMPRESS_BATCH_SIZE / ONE_ROUND_SIZE;
+
+    unsafe {
+        assert_eq!(
+            ONE_ROUND_SIZE * NUM_ROUNDS_IN_A_BATCH,
+            SIMD_COMPRESS_BATCH_SIZE
+        );
+
+        let batch_n = (n / SIMD_COMPRESS_BATCH_SIZE) * SIMD_COMPRESS_BATCH_SIZE;
+
+        let mut src_ptr = src.as_ptr();
+        let mut dst_ptr = dst.as_mut_ptr();
+        let mut bitmap_ptr = bitmap.as_ptr();
+
+        // Process complete batches of 128 elements
+        for _ in (0..batch_n).step_by(SIMD_COMPRESS_BATCH_SIZE) {
+            // View 128-bit bitmap segment as 16 separate 8-bit masks
+            let masks = slice::from_raw_parts(bitmap_ptr as *const u8, NUM_ROUNDS_IN_A_BATCH);
+
+            // Process 16 rounds of 8 elements each
+            for (_j, &mask) in masks.iter().enumerate().take(NUM_ROUNDS_IN_A_BATCH) {
+                // Load 8 elements and compress using mask
+                let src_v = _mm512_loadu_epi64(src_ptr as *const i64);
+                let dst_v = _mm512_maskz_compress_epi64(mask, src_v);
+                _mm512_storeu_epi64(dst_ptr as *mut i64, dst_v);
+
+                let popcnt = mask.count_ones() as usize;
+                src_ptr = src_ptr.add(ONE_ROUND_SIZE);
+                dst_ptr = dst_ptr.add(popcnt);
+            }
+
+            bitmap_ptr = bitmap_ptr.add(2); // Advance by 2 u64s (128 bits)
+        }
+
+        // Handle the remaining elements (< 128) using the optimized fallback.
+        if n > batch_n {
+            let elements_written_avx = dst_ptr.offset_from(dst.as_ptr()) as usize;
+            let rem_n = n - batch_n;
+            let rem_src = &src[batch_n..n];
+            let rem_bitmap = &bitmap[batch_n / 64..];
+            let rem_dst = &mut dst[elements_written_avx..];
+            let count_rem = select_unpacked_fallback(rem_src, rem_bitmap, rem_dst, rem_n);
+            dst_ptr = dst_ptr.add(count_rem);
+        }
+
+        dst_ptr.offset_from(dst.as_ptr()) as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{bit_pack, bit_unpack};
@@ -592,5 +733,193 @@ mod tests {
             select_packed(&packed, bw, &bit_mask, &mut bmi);
             assert_eq!(generic, bmi);
         }
+    }
+
+    #[test]
+    fn test_select_unpacked_basic() {
+        // Test basic selection functionality with unpacked data
+        let src = vec![10, 20, 30, 40, 50];
+        let bitmap_data = vec![1u64, 0, 1, 0, 1]; // Select elements at positions 0, 2, 4
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 5]; // Allocate enough space
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, 3);
+        assert_eq!(&dst[..count], &[10, 30, 50]);
+    }
+
+    #[test]
+    fn test_select_unpacked_all() {
+        // Test selecting all elements
+        let src = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let bitmap_data = vec![1u64; 8]; // Select all elements
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 8];
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, 8);
+        assert_eq!(&dst[..count], &src);
+    }
+
+    #[test]
+    fn test_select_unpacked_none() {
+        // Test selecting no elements
+        let src = vec![1, 2, 3, 4, 5];
+        let bitmap_data = vec![0u64; 5]; // Select no elements
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 5];
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_select_unpacked_large_batch() {
+        // Test with a large dataset that requires batch processing (>= 128 elements)
+        let src: Vec<u64> = (0..2048).collect();
+        let bitmap_data: Vec<u64> = (0..2048).map(|i| if i % 3 > 0 { 1 } else { 0 }).collect(); // Select every 3rd element
+        let selected_count = bitmap_data.iter().filter(|&&x| x != 0).count();
+
+        let bitmap_bits = bitmap_data.len();
+        let mut bitmap = vec![0u64; bitmap_bits.div_ceil(64)];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; src.len()];
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, selected_count);
+
+        // Verify the selected elements are correct
+        let expected: Vec<u64> = (0..2048).filter(|&i| i % 3 > 0).collect();
+        assert_eq!(&dst[..count], &expected);
+    }
+
+    #[test]
+    fn test_select_unpacked_partial() {
+        // Test with n < src.len()
+        let src = vec![10, 20, 30, 40, 50, 60, 70, 80];
+        let bitmap_data = vec![1u64, 0, 1, 1, 0]; // Only consider first 5 elements
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 8];
+        let count = select_unpacked(&src, &bitmap, &mut dst, 5); // Only process first 5 elements
+
+        assert_eq!(count, 3);
+        assert_eq!(&dst[..count], &[10, 30, 40]);
+    }
+
+    #[test]
+    fn test_select_unpacked_cross_u64_boundary() {
+        // Test selection that crosses u64 boundaries in the bitmap
+        let src: Vec<u64> = (1..=100).collect();
+        let bitmap_data: Vec<u64> = (0..100).map(|i| if i % 2 == 0 { 1 } else { 0 }).collect();
+
+        let bitmap_bits = bitmap_data.len();
+        let mut bitmap = vec![0u64; bitmap_bits.div_ceil(64)];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; src.len()];
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, 50); // Half the elements should be selected
+
+        // Verify the selected elements are the even-indexed ones (1-indexed)
+        let expected: Vec<u64> = (1..=100).step_by(2).collect();
+        assert_eq!(&dst[..count], &expected);
+    }
+
+    #[test]
+    fn test_select_unpacked_fallback_matches_optimized() {
+        // Test that fallback and optimized versions produce the same results
+        let src: Vec<u64> = (1..=150).collect();
+        let bitmap_data: Vec<u64> = (0..150)
+            .map(|i| if (i * 7) % 3 > 0 { 1 } else { 0 })
+            .collect(); // Pseudo-random pattern
+
+        let bitmap_bits = bitmap_data.len();
+        let mut bitmap = vec![0u64; bitmap_bits.div_ceil(64)];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        // Test fallback version
+        let mut dst_fallback = vec![0u64; src.len()];
+        let count_fallback = select_unpacked_fallback(&src, &bitmap, &mut dst_fallback, src.len());
+
+        // Test optimized version (if available)
+        let mut dst_optimized = vec![0u64; src.len()];
+        let count_optimized = select_unpacked(&src, &bitmap, &mut dst_optimized, src.len());
+
+        // Results should match
+        assert_eq!(count_fallback, count_optimized);
+        assert_eq!(
+            &dst_fallback[..count_fallback],
+            &dst_optimized[..count_optimized]
+        );
+    }
+
+    #[test]
+    fn test_select_unpacked_edge_case_empty() {
+        // Test with empty input
+        let src: Vec<u64> = vec![];
+        let bitmap = vec![0u64];
+        let mut dst = vec![0u64; 1];
+
+        let count = select_unpacked(&src, &bitmap, &mut dst, 0);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_select_unpacked_single_element() {
+        // Test with single element
+        let src = vec![42];
+        let bitmap_data = vec![1u64];
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 1];
+        let count = select_unpacked(&src, &bitmap, &mut dst, 1);
+
+        assert_eq!(count, 1);
+        assert_eq!(dst[0], 42);
+
+        // Test with single element not selected
+        let bitmap_data = vec![0u64];
+        let mut bitmap = vec![0u64; 1];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; 1];
+        let count = select_unpacked(&src, &bitmap, &mut dst, 1);
+
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_select_unpacked_exactly_128_elements() {
+        // Test with exactly 128 elements (one full batch)
+        let src: Vec<u64> = (1..=128).collect();
+        let bitmap_data: Vec<u64> = (0..128).map(|i| if i % 4 > 0 { 1 } else { 0 }).collect(); // Select 3/4 of elements
+        let selected_count = bitmap_data.iter().filter(|&&x| x != 0).count();
+
+        let bitmap_bits = bitmap_data.len();
+        let mut bitmap = vec![0u64; bitmap_bits.div_ceil(64)];
+        bit_pack(&bitmap_data, 1, &mut bitmap);
+
+        let mut dst = vec![0u64; src.len()];
+        let count = select_unpacked(&src, &bitmap, &mut dst, src.len());
+
+        assert_eq!(count, selected_count);
+
+        // Verify correctness by checking with fallback
+        let mut dst_fallback = vec![0u64; src.len()];
+        let count_fallback = select_unpacked_fallback(&src, &bitmap, &mut dst_fallback, src.len());
+
+        assert_eq!(count, count_fallback);
+        assert_eq!(&dst[..count], &dst_fallback[..count_fallback]);
     }
 }
