@@ -506,8 +506,8 @@ fn select_unpacked_fallback(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usi
     let mut src_idx = 0;
     let num_full_chunks = n / 64;
 
-    for i in 0..num_full_chunks {
-        let mut current_bitmap = bitmap[i];
+    for (_i, &current_bitmap) in bitmap.iter().enumerate().take(num_full_chunks) {
+        let mut current_bitmap = current_bitmap;
         // This loop of 64 is branch-free for selection.
         for _ in 0..64 {
             dst[selected_idx] = src[src_idx];
@@ -576,9 +576,7 @@ unsafe fn select_unpacked_avx512_compress(
             let masks = slice::from_raw_parts(bitmap_ptr as *const u8, NUM_ROUNDS_IN_A_BATCH);
 
             // Process 16 rounds of 8 elements each
-            for j in 0..NUM_ROUNDS_IN_A_BATCH {
-                let mask = masks[j];
-
+            for (_j, &mask) in masks.iter().enumerate().take(NUM_ROUNDS_IN_A_BATCH) {
                 // Load 8 elements and compress using mask
                 let src_v = _mm512_loadu_epi64(src_ptr as *const i64);
                 let dst_v = _mm512_maskz_compress_epi64(mask, src_v);
