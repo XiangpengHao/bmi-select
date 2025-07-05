@@ -717,7 +717,7 @@ mod tests {
             let mut packed = vec![0u64; total_bits.div_ceil(64)];
             bit_pack(&data, bw, &mut packed);
             let mask_data: Vec<u64> = (0..data.len())
-                .map(|i| if i % 3 == 0 { 1 } else { 0 })
+                .map(|i| if i.is_multiple_of(3) { 1 } else { 0 })
                 .collect();
             let mask_bits = mask_data.len();
             let mut bit_mask = vec![0u64; mask_bits.div_ceil(64)];
@@ -796,7 +796,7 @@ mod tests {
         assert_eq!(count, selected_count);
 
         // Verify the selected elements are correct
-        let expected: Vec<u64> = (0..2048).filter(|&i| i % 3 > 0).collect();
+        let expected: Vec<u64> = (0..2048u64).filter(|&i| !i.is_multiple_of(3)).collect();
         assert_eq!(&dst[..count], &expected);
     }
 
