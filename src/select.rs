@@ -90,9 +90,14 @@ pub fn select_packed(packed: &[u64], bit_width: usize, bit_mask: &[u64], out: &m
         if !is_x86_feature_detected!("bmi2") {
             return select_packed_fallback(packed, bit_width, bit_mask, out);
         }
+
+        unsafe { select_packed_bmi_impl(packed, bit_width, bit_mask, out) }
     }
 
-    unsafe { select_packed_bmi_impl(packed, bit_width, bit_mask, out) }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        select_packed_fallback(packed, bit_width, bit_mask, out)
+    }
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -177,6 +182,7 @@ unsafe fn select_packed_bmi_impl(
 
 /// For a given bit width k, we need k distinct masks that are reused in a
 /// round-robin fashion for successive 64-bit words.
+#[cfg_attr(not(any(target_arch = "x86", target_arch = "x86_64")), allow(unused))]
 const fn compute_base_pattern(bit_width: usize) -> u64 {
     let mut base_pattern = 0u64;
     let mut pos = 0;
@@ -189,6 +195,7 @@ const fn compute_base_pattern(bit_width: usize) -> u64 {
 
 /// Compute the masks for a specific bit width.
 /// Returns an array of up to 64 masks (since bit_width is at most 64).
+#[cfg_attr(not(any(target_arch = "x86", target_arch = "x86_64")), allow(unused))]
 const fn compute_masks_for_bit_width(bit_width: usize) -> ([u64; 64], usize) {
     let base_pattern = compute_base_pattern(bit_width);
     let mut masks = [0u64; 64];
@@ -206,6 +213,7 @@ const fn compute_masks_for_bit_width(bit_width: usize) -> ([u64; 64], usize) {
 
 /// Get precomputed masks for the given bit width.
 /// Returns a slice containing the masks for this bit width.
+#[cfg_attr(not(any(target_arch = "x86", target_arch = "x86_64")), allow(unused))]
 fn get_precomputed_masks(bit_width: usize) -> &'static [u64] {
     match bit_width {
         1 => {
@@ -495,9 +503,14 @@ pub fn select_unpacked(src: &[u64], bitmap: &[u64], dst: &mut [u64], n: usize) -
         if !is_x86_feature_detected!("avx512f") {
             return select_unpacked_fallback(src, bitmap, dst, n);
         }
+
+        unsafe { select_unpacked_avx512_compress(src, bitmap, dst, n) }
     }
 
-    unsafe { select_unpacked_avx512_compress(src, bitmap, dst, n) }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        select_unpacked_fallback(src, bitmap, dst, n)
+    }
 }
 
 /// Scalar fallback implementation for CPUs without AVX-512.
